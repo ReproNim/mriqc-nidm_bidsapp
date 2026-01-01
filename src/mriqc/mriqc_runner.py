@@ -51,7 +51,7 @@ class MRIQCWrapper:
         """
         self.bids_dir = Path(bids_dir)
         self.output_dir = Path(output_dir)
-        self.mriqc_dir = self.output_dir / "mriqc_nidm" / "mriqc"
+        self.mriqc_dir = self.output_dir / "mriqc-nidm_bidsapp" / "mriqc"
         self.work_dir = Path(work_dir) if work_dir else self.output_dir / "work"
 
         # Track processing results

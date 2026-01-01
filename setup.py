@@ -100,7 +100,7 @@ if len(sys.argv) > 1 and sys.argv[1] in ["docker", "singularity", "containers"]:
         sys.exit(0)
 
 setup(
-    name="mriqc_nidm_bidsapp",
+    name="mriqc-nidm_bidsapp",
     version="0.1.0",
     description="BIDS App for MRIQC with NIDM Output",
     author="ReproNim",
@@ -122,8 +122,8 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            # Note: run.py will be moved to src/mriqc_nidm/ in PR #7
-            "mriqc-nidm=mriqc_nidm.run:main",
+            # Entry point for mriqc-nidm CLI
+            "mriqc-nidm=mriqc.run:main",
         ],
     },
     python_requires=">=3.9",

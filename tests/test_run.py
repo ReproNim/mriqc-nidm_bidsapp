@@ -7,7 +7,7 @@ These tests verify the CLI argument parsing and passthrough functionality.
 
 import pytest
 
-from mriqc_nidm.run import parse_mriqc_args
+from mriqc.utils import parse_mriqc_args
 
 
 class TestParseMriqcArgs:

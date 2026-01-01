@@ -1,14 +1,16 @@
 #!/usr/bin/env python
 """
-NIDM Handler for MRIQC-NIDM BIDSAPP
+NIDM Converter for MRIQC-NIDM BIDSAPP
 
 This module handles existing NIDM file detection and copying.
 Follows patterns from freesurfer_bidsapp/src/run.py for NIDM augmentation workflow.
 
 Key features:
-- Detects existing NIDM files following BIDS/../NIDM/ convention
-- Safely copies existing NIDM to output directory
+- Detects existing NIDM files from provided NIDM input directory
+- Safely copies existing NIDM to output directory with proper subdirectory structure
 - Supports NIDM augmentation workflow (adding MRIQC data to existing NIDM)
+
+Part of the src/nidm/ package (standards compliant structure).
 
 Author: Adapted from freesurfer_bidsapp for mriqc-nidm_bidsapp
 """
@@ -70,13 +72,16 @@ def _search_nidm_in_directory(
 
 
 def detect_existing_nidm(
-    bids_dir: Path, subject_id: str, logger: Optional[logging.Logger] = None
+    subject_id: str,
+    nidm_input_dir: Optional[Path] = None,
+    bids_dir: Optional[Path] = None,
+    logger: Optional[logging.Logger] = None
 ) -> Optional[Path]:
     """
-    Detect existing NIDM file for subject following freesurfer_bidsapp pattern.
+    Detect existing NIDM file for subject.
 
-    Searches for NIDM files in the convention-based location: BIDS_DIR/../NIDM/sub-{subject_id}/
-    This follows the pattern used by freesurfer_bidsapp and other NIDM-producing BIDSAPPs.
+    Searches for NIDM files in either the provided nidm_input_dir or the
+    convention-based location (BIDS_DIR/../NIDM/sub-{subject_id}/).
 
     Search order (first match returned):
     1. nidm.ttl (preferred)
@@ -85,19 +90,25 @@ def detect_existing_nidm(
     4. Any *.json-ld file
 
     Args:
-        bids_dir: Path to BIDS dataset directory
         subject_id: Subject identifier (without "sub-" prefix)
+        nidm_input_dir: Optional explicit NIDM input directory (preferred)
+        bids_dir: Optional BIDS dataset directory (for convention-based lookup)
         logger: Optional logger instance
 
     Returns:
         Path to existing NIDM file, or None if not found
 
+    Raises:
+        ValueError: If neither nidm_input_dir nor bids_dir is provided
+
     Examples:
-        >>> detect_existing_nidm(Path('/data/BIDS'), '01', logger)
+        >>> # Explicit NIDM input directory (recommended)
+        >>> detect_existing_nidm('01', nidm_input_dir=Path('/data/NIDM'), logger=logger)
         Path('/data/NIDM/sub-01/nidm.ttl')
 
-        >>> detect_existing_nidm(Path('/data/BIDS'), '99', logger)
-        None  # No NIDM files found
+        >>> # Convention-based (backward compatibility)
+        >>> detect_existing_nidm('01', bids_dir=Path('/data/BIDS'), logger=logger)
+        Path('/data/NIDM/sub-01/nidm.ttl')
 
     Notes:
         - Returns None if NIDM directory doesn't exist (not an error)
@@ -108,28 +119,38 @@ def detect_existing_nidm(
     if logger is None:
         logger = logging.getLogger(__name__)
 
-    # Convention: NIDM files are in BIDS_DIR/../NIDM/sub-{subject_id}/
-    nidm_input_dir = bids_dir.parent / "NIDM" / f"sub-{subject_id}"
+    # Determine search directory
+    if nidm_input_dir is not None:
+        # Explicit NIDM input directory (standards-compliant)
+        search_dir = nidm_input_dir / f"sub-{subject_id}"
+        logger.debug(f"Using explicit NIDM input directory: {nidm_input_dir}")
+    elif bids_dir is not None:
+        # Convention-based location (backward compatibility)
+        search_dir = bids_dir.parent / "NIDM" / f"sub-{subject_id}"
+        logger.debug(f"Using convention-based NIDM location: BIDS/../NIDM/")
+    else:
+        raise ValueError("Either nidm_input_dir or bids_dir must be provided")
 
     # Use shared search logic
-    return _search_nidm_in_directory(nidm_input_dir, logger)
+    return _search_nidm_in_directory(search_dir, logger)
 
 
-def copy_nidm_to_output(
+def copy_and_prepare_nidm(
     existing_nidm: Path,
-    output_dir: Path,
+    destination_dir: Path,
     logger: Optional[logging.Logger] = None,
 ) -> Path:
     """
-    Safely copy existing NIDM file to output directory.
+    Safely copy existing NIDM file to output directory and prepare for augmentation.
 
     This function ensures that the input NIDM file is never modified by
-    copying it to the output directory first. Follows the safety-first
-    pattern from freesurfer_bidsapp.
+    copying it to the output directory first. Creates necessary subdirectories
+    following BIDS derivatives structure. Follows the safety-first pattern
+    from freesurfer_bidsapp.
 
     Args:
         existing_nidm: Path to existing NIDM file
-        output_dir: Path to output directory
+        destination_dir: Path to destination directory (includes sub-*/ses-* subdirs)
         logger: Optional logger instance
 
     Returns:
@@ -140,15 +161,15 @@ def copy_nidm_to_output(
         OSError: If copy operation fails
 
     Examples:
-        >>> copy_nidm_to_output(
+        >>> copy_and_prepare_nidm(
         ...     Path('/data/NIDM/sub-01/nidm.ttl'),
-        ...     Path('/output/nidm'),
+        ...     Path('/output/nidm/sub-01'),
         ...     logger
         ... )
-        Path('/output/nidm/nidm.ttl')
+        Path('/output/nidm/sub-01/nidm.ttl')
 
     Notes:
-        - Creates output directory if it doesn't exist
+        - Creates destination directory with parents if it doesn't exist
         - Preserves file metadata (timestamps, permissions)
         - Safety check prevents overwriting input file
         - Uses shutil.copy2 for metadata preservation
@@ -162,11 +183,11 @@ def copy_nidm_to_output(
         logger.error(f"Existing NIDM file not found: {existing_nidm}")
         raise FileNotFoundError(f"NIDM file not found: {existing_nidm}")
 
-    # Create output directory if needed
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Create destination directory with parents if needed
+    destination_dir.mkdir(parents=True, exist_ok=True)
 
     # Determine output path (preserve original filename)
-    output_path = output_dir / existing_nidm.name
+    output_path = destination_dir / existing_nidm.name
 
     # Safety check: don't copy if paths are the same
     try:

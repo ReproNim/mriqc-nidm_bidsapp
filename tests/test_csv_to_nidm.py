@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from mriqc_nidm.csv_to_nidm import (
+from nidm_converter.csv_to_nidm import (
     CSV2NIDM_TOOL,
     check_csv2nidm_available,
     convert_csv_to_nidm,

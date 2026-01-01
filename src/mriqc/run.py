@@ -21,148 +21,28 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from mriqc_nidm import __version__
-from mriqc_nidm.csv_to_nidm import check_csv2nidm_available, convert_csv_to_nidm
-from mriqc_nidm.data import get_mriqc_dictionary
-from mriqc_nidm.json_to_csv import convert_mriqc_json_to_csv
-from mriqc_nidm.mriqc_wrapper import MRIQCWrapper
-from mriqc_nidm.nidm_handler import (
-    _search_nidm_in_directory,
-    copy_nidm_to_output,
-    detect_existing_nidm,
+from mriqc import __version__
+from mriqc.mriqc_runner import MRIQCWrapper
+from mriqc.utils import (
+    normalize_label,
+    parse_mriqc_args,
+    setup_logging,
+    create_dataset_description,
 )
+from nidm_converter import (
+    convert_csv_to_nidm,
+    convert_mriqc_json_to_csv,
+    copy_and_prepare_nidm,
+    detect_existing_nidm,
+    build_nidm_output_path,
+    build_nidm_filename,
+)
+from nidm_converter.csv_to_nidm import check_csv2nidm_available
+from nidm_converter.data import get_mriqc_dictionary
 
 
-def normalize_label(label: str, prefix: str) -> str:
-    """
-    Normalize a BIDS label by stripping prefix if present.
-
-    Makes the code robust to both formats:
-    - With prefix: 'sub-0051456' → '0051456'
-    - Without prefix: '0051456' → '0051456'
-
-    Args:
-        label: The label to normalize
-        prefix: The prefix to strip (e.g., 'sub-', 'ses-')
-
-    Returns:
-        Label without the prefix
-    """
-    return label[len(prefix):] if label.startswith(prefix) else label
-
-
-def parse_mriqc_args(extra_args: List[str]) -> Dict[str, Any]:
-    """
-    Parse MRIQC extra arguments into kwargs dictionary.
-
-    Converts command-line style arguments into a dictionary suitable for
-    passing to MRIQCWrapper. Handles both key-value pairs and boolean flags.
-
-    Examples:
-        ['--mem', '16G', '--nprocs', '12'] → {'mem': '16G', 'nprocs': 12}
-        ['--ica', '--no-sub'] → {'ica': True, 'no_sub': True}
-
-    Args:
-        extra_args: List of command-line arguments not recognized by mriqc-nidm
-
-    Returns:
-        Dictionary of parsed arguments with underscored keys
-    """
-    mriqc_kwargs: Dict[str, Any] = {}
-    i = 0
-    while i < len(extra_args):
-        arg = extra_args[i]
-        if arg.startswith("--"):
-            key = arg[2:].replace("-", "_")  # --omp-nthreads → omp_nthreads
-            # Check if next arg is a value or another flag
-            if i + 1 < len(extra_args) and not extra_args[i + 1].startswith("-"):
-                value: Any = extra_args[i + 1]
-                # Try to convert to int/float if possible
-                try:
-                    value = int(value)
-                except ValueError:
-                    try:
-                        value = float(value)
-                    except ValueError:
-                        pass  # Keep as string
-                mriqc_kwargs[key] = value
-                i += 2
-            else:
-                # Boolean flag
-                mriqc_kwargs[key] = True
-                i += 1
-        else:
-            i += 1
-    return mriqc_kwargs
-
-
-def setup_logging(output_dir: Path, verbose: bool = False) -> logging.Logger:
-    """
-    Set up logging configuration.
-
-    Args:
-        output_dir: Output directory for log files
-        verbose: Enable verbose (DEBUG) logging
-
-    Returns:
-        Configured logger instance
-    """
-    log_dir = output_dir / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_file = log_dir / f"mriqc-nidm-{timestamp}.log"
-
-    level = logging.DEBUG if verbose else logging.INFO
-
-    # Configure root logger
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[logging.FileHandler(log_file), logging.StreamHandler()],
-    )
-
-    logger = logging.getLogger("mriqc-nidm")
-    logger.info(f"MRIQC-NIDM BIDSAPP version {__version__}")
-    logger.info(f"Log file: {log_file}")
-
-    return logger
-
-
-def create_dataset_description(output_dir: Path, logger: logging.Logger) -> Path:
-    """
-    Create dataset_description.json for NIDM derivatives.
-
-    Args:
-        output_dir: Output directory
-        logger: Logger instance
-
-    Returns:
-        Path to created dataset_description.json
-    """
-    nidm_dir = output_dir / "mriqc_nidm" / "nidm"
-    nidm_dir.mkdir(parents=True, exist_ok=True)
-
-    dataset_desc = {
-        "Name": "MRIQC Quality Control Metrics (NIDM)",
-        "BIDSVersion": "1.6.0",
-        "DatasetType": "derivative",
-        "GeneratedBy": [
-            {
-                "Name": "MRIQC-NIDM BIDSAPP",
-                "Version": __version__,
-                "CodeURL": "https://github.com/yibeichan/mriqc-nidm_bidsapp",
-            }
-        ],
-        "HowToAcknowledge": "Please cite MRIQC (https://doi.org/10.1371/journal.pone.0184661) and NIDM (http://nidm.nidash.org/)",
-    }
-
-    desc_file = nidm_dir / "dataset_description.json"
-    with open(desc_file, "w") as f:
-        json.dump(dataset_desc, f, indent=2)
-
-    logger.info(f"Created dataset description: {desc_file}")
-    return desc_file
+# Utility functions are now imported from mriqc.utils
+# No duplicate definitions needed here
 
 
 def process_subject(
@@ -195,15 +75,12 @@ def process_subject(
 
     try:
         # Step 1: Detect existing NIDM input
-        existing_nidm = None
-        if nidm_input_dir:
-            # Custom NIDM input directory specified
-            # Use shared search logic to ensure consistency
-            nidm_input_subject_dir = nidm_input_dir / f"sub-{subject_id}"
-            existing_nidm = _search_nidm_in_directory(nidm_input_subject_dir, logger)
-        else:
-            # Convention-based location: BIDS/../NIDM/
-            existing_nidm = detect_existing_nidm(bids_dir, subject_id, logger)
+        existing_nidm = detect_existing_nidm(
+            subject_id=subject_id,
+            nidm_input_dir=nidm_input_dir,
+            bids_dir=bids_dir if not nidm_input_dir else None,
+            logger=logger
+        )
 
         # Step 2: Find MRIQC outputs
         # Look for MRIQC JSON files in the MRIQC output directory
@@ -237,33 +114,35 @@ def process_subject(
             return True
 
         # Step 3: Process each MRIQC JSON file
-        # Output directly to nidm/ folder (no per-subject subfolder)
-        nidm_output_dir = output_dir / "mriqc_nidm" / "nidm"
-        nidm_output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Get data dictionary path
-        dictionary_csv = get_mriqc_dictionary()
-
         # Extract session info from first JSON file (if present)
         # BABS runs session by session, so all files in one run share the same session
         # Filename pattern: sub-01_ses-01_T1w.json or sub-01_T1w.json
         session_match = re.search(r"_ses-([a-zA-Z0-9]+)", json_files[0].name)
         session_id = session_match.group(1) if session_match else None
-
-        # Define canonical TTL file (ONE file per subject/session)
-        # All scans (T1w, bold, etc.) are merged into this single file
         if session_id:
-            subject_ttl_file = nidm_output_dir / f"sub-{subject_id}_ses-{session_id}.ttl"
             logger.info(f"Session detected: ses-{session_id}")
-        else:
-            subject_ttl_file = nidm_output_dir / f"sub-{subject_id}.ttl"
+
+        # Build subject/session specific NIDM output directory (standards compliant)
+        base_nidm_dir = output_dir / "mriqc-nidm_bidsapp" / "nidm"
+        subject_nidm_dir = build_nidm_output_path(base_nidm_dir, subject_id, session_id)
+        subject_nidm_dir.mkdir(parents=True, exist_ok=True)
+        logger.debug(f"NIDM output directory: {subject_nidm_dir}")
+
+        # Get data dictionary path
+        dictionary_csv = get_mriqc_dictionary()
+
+        # Build canonical TTL filename (ONE file per subject/session)
+        # All scans (T1w, bold, etc.) are merged into this single file
+        ttl_filename = build_nidm_filename(subject_id, session_id)
+        subject_ttl_file = subject_nidm_dir / ttl_filename
+        logger.debug(f"Target NIDM file: {subject_ttl_file}")
 
         # Step 3a: Copy existing NIDM and prepare augmentation target
         # CRITICAL: Must copy once before loop, not inside loop!
         augmentation_target = None
         if existing_nidm:
-            copied_nidm = copy_nidm_to_output(
-                existing_nidm, nidm_output_dir, logger
+            copied_nidm = copy_and_prepare_nidm(
+                existing_nidm, subject_nidm_dir, logger
             )
             # Rename to canonical name if different
             if copied_nidm != subject_ttl_file:
@@ -279,7 +158,7 @@ def process_subject(
             logger.info(f"Converting {json_file.name} ({idx + 1}/{len(json_files)})")
 
             # Step 3b: Convert JSON → CSV
-            csv_file = nidm_output_dir / f"{json_file.stem}.csv"
+            csv_file = subject_nidm_dir / f"{json_file.stem}.csv"
             try:
                 csv_path, software_csv_path = convert_mriqc_json_to_csv(
                     json_file, csv_file, logger
@@ -379,9 +258,15 @@ MRIQC Arguments:
         help="Subject label(s) to process (without 'sub-' prefix)",
     )
     parser.add_argument(
+        "--session-label",
+        nargs="+",
+        help='Session label(s) to process (without "ses-" prefix, e.g., "baseline" "followup")',
+    )
+    parser.add_argument(
         "--nidm-input-dir",
         type=Path,
-        help="Override default NIDM input location (default: BIDS_DIR/../NIDM/)",
+        required=True,
+        help="Directory containing existing NIDM files (required for NIDM augmentation)",
     )
     parser.add_argument(
         "--skip-mriqc",
@@ -422,7 +307,7 @@ MRIQC Arguments:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     # Setup logging
-    logger = setup_logging(args.output_dir, args.verbose)
+    logger = setup_logging(args.output_dir, args.verbose, __version__)
 
     # Check for required tools
     if not args.skip_nidm_conversion and not check_csv2nidm_available():
@@ -438,7 +323,7 @@ MRIQC Arguments:
         skip_mriqc = True
         logger.info(f"Using existing MRIQC output: {mriqc_dir}")
     else:
-        mriqc_dir = args.output_dir / "mriqc_nidm" / "mriqc"
+        mriqc_dir = args.output_dir / "mriqc-nidm_bidsapp" / "mriqc"
         skip_mriqc = args.skip_mriqc
 
     # Validate MRIQC directory if skipping execution

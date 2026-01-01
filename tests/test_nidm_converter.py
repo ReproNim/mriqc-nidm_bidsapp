@@ -1,5 +1,5 @@
 """
-Unit tests for nidm_handler module
+Unit tests for nidm_converter module
 
 Tests NIDM detection and copying functionality.
 """
@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from mriqc_nidm.nidm_handler import (
-    copy_nidm_to_output,
+from nidm_converter.nidm_converter import (
+    copy_and_prepare_nidm,
     detect_existing_nidm,
     get_supported_nidm_formats,
     is_nidm_file,
@@ -22,7 +22,7 @@ from mriqc_nidm.nidm_handler import (
 @pytest.fixture
 def logger():
     """Test logger"""
-    logger = logging.getLogger("test_nidm_handler")
+    logger = logging.getLogger("test_nidm_converter")
     logger.setLevel(logging.DEBUG)
     return logger
 
@@ -31,9 +31,9 @@ def logger():
 def test_detect_existing_nidm_preferred_file(logger):
     """Test detection of preferred nidm.ttl file"""
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Create BIDS structure
-        bids_dir = Path(tmpdir) / "BIDS"
-        nidm_dir = Path(tmpdir) / "NIDM" / "sub-01"
+        # Create NIDM structure
+        nidm_input_dir = Path(tmpdir) / "NIDM"
+        nidm_dir = nidm_input_dir / "sub-01"
         nidm_dir.mkdir(parents=True)
 
         # Create preferred file
@@ -44,7 +44,7 @@ def test_detect_existing_nidm_preferred_file(logger):
         (nidm_dir / "other.ttl").touch()
         (nidm_dir / "data.jsonld").touch()
 
-        result = detect_existing_nidm(bids_dir, "01", logger)
+        result = detect_existing_nidm(subject_id="01", nidm_input_dir=nidm_input_dir, logger=logger)
 
         assert result is not None
         assert result == nidm_file
@@ -54,15 +54,15 @@ def test_detect_existing_nidm_preferred_file(logger):
 def test_detect_existing_nidm_any_ttl_file(logger):
     """Test detection of any .ttl file when nidm.ttl doesn't exist"""
     with tempfile.TemporaryDirectory() as tmpdir:
-        bids_dir = Path(tmpdir) / "BIDS"
-        nidm_dir = Path(tmpdir) / "NIDM" / "sub-02"
+        nidm_input_dir = Path(tmpdir) / "NIDM"
+        nidm_dir = nidm_input_dir / "sub-02"
         nidm_dir.mkdir(parents=True)
 
         # Create a .ttl file (not nidm.ttl)
         ttl_file = nidm_dir / "data.ttl"
         ttl_file.touch()
 
-        result = detect_existing_nidm(bids_dir, "02", logger)
+        result = detect_existing_nidm(subject_id="02", nidm_input_dir=nidm_input_dir, logger=logger)
 
         assert result is not None
         assert result == ttl_file
@@ -72,15 +72,15 @@ def test_detect_existing_nidm_any_ttl_file(logger):
 def test_detect_existing_nidm_jsonld_file(logger):
     """Test detection of .jsonld file when no .ttl files exist"""
     with tempfile.TemporaryDirectory() as tmpdir:
-        bids_dir = Path(tmpdir) / "BIDS"
-        nidm_dir = Path(tmpdir) / "NIDM" / "sub-03"
+        nidm_input_dir = Path(tmpdir) / "NIDM"
+        nidm_dir = nidm_input_dir / "sub-03"
         nidm_dir.mkdir(parents=True)
 
         # Create a .jsonld file
         jsonld_file = nidm_dir / "data.jsonld"
         jsonld_file.touch()
 
-        result = detect_existing_nidm(bids_dir, "03", logger)
+        result = detect_existing_nidm(subject_id="03", nidm_input_dir=nidm_input_dir, logger=logger)
 
         assert result is not None
         assert result == jsonld_file
@@ -90,15 +90,15 @@ def test_detect_existing_nidm_jsonld_file(logger):
 def test_detect_existing_nidm_json_ld_file(logger):
     """Test detection of .json-ld file"""
     with tempfile.TemporaryDirectory() as tmpdir:
-        bids_dir = Path(tmpdir) / "BIDS"
-        nidm_dir = Path(tmpdir) / "NIDM" / "sub-04"
+        nidm_input_dir = Path(tmpdir) / "NIDM"
+        nidm_dir = nidm_input_dir / "sub-04"
         nidm_dir.mkdir(parents=True)
 
         # Create a .json-ld file
         json_ld_file = nidm_dir / "data.json-ld"
         json_ld_file.touch()
 
-        result = detect_existing_nidm(bids_dir, "04", logger)
+        result = detect_existing_nidm(subject_id="04", nidm_input_dir=nidm_input_dir, logger=logger)
 
         assert result is not None
         assert result == json_ld_file
@@ -108,9 +108,9 @@ def test_detect_existing_nidm_json_ld_file(logger):
 def test_detect_existing_nidm_no_directory(logger):
     """Test when NIDM directory doesn't exist"""
     with tempfile.TemporaryDirectory() as tmpdir:
-        bids_dir = Path(tmpdir) / "BIDS"
+        nidm_input_dir = Path(tmpdir) / "NIDM"
 
-        result = detect_existing_nidm(bids_dir, "99", logger)
+        result = detect_existing_nidm(subject_id="99", nidm_input_dir=nidm_input_dir, logger=logger)
 
         assert result is None
 
@@ -118,11 +118,11 @@ def test_detect_existing_nidm_no_directory(logger):
 def test_detect_existing_nidm_empty_directory(logger):
     """Test when NIDM directory exists but is empty"""
     with tempfile.TemporaryDirectory() as tmpdir:
-        bids_dir = Path(tmpdir) / "BIDS"
-        nidm_dir = Path(tmpdir) / "NIDM" / "sub-05"
+        nidm_input_dir = Path(tmpdir) / "NIDM"
+        nidm_dir = nidm_input_dir / "sub-05"
         nidm_dir.mkdir(parents=True)
 
-        result = detect_existing_nidm(bids_dir, "05", logger)
+        result = detect_existing_nidm(subject_id="05", nidm_input_dir=nidm_input_dir, logger=logger)
 
         assert result is None
 
@@ -130,22 +130,22 @@ def test_detect_existing_nidm_empty_directory(logger):
 def test_detect_existing_nidm_no_logger():
     """Test that detection works without providing a logger"""
     with tempfile.TemporaryDirectory() as tmpdir:
-        bids_dir = Path(tmpdir) / "BIDS"
-        nidm_dir = Path(tmpdir) / "NIDM" / "sub-01"
+        nidm_input_dir = Path(tmpdir) / "NIDM"
+        nidm_dir = nidm_input_dir / "sub-01"
         nidm_dir.mkdir(parents=True)
 
         nidm_file = nidm_dir / "nidm.ttl"
         nidm_file.touch()
 
         # Call without logger - should create default
-        result = detect_existing_nidm(bids_dir, "01")
+        result = detect_existing_nidm(subject_id="01", nidm_input_dir=nidm_input_dir)
 
         assert result is not None
         assert result == nidm_file
 
 
-# Tests for copy_nidm_to_output
-def test_copy_nidm_to_output_success(logger):
+# Tests for copy_and_prepare_nidm
+def test_copy_and_prepare_nidm_success(logger):
     """Test successful copy of NIDM file"""
     with tempfile.TemporaryDirectory() as tmpdir:
         # Create source file
@@ -156,7 +156,7 @@ def test_copy_nidm_to_output_success(logger):
 
         # Copy to output
         output_dir = Path(tmpdir) / "output"
-        result = copy_nidm_to_output(source_file, output_dir, logger)
+        result = copy_and_prepare_nidm(source_file, output_dir, logger)
 
         # Verify
         assert result.exists()
@@ -165,17 +165,17 @@ def test_copy_nidm_to_output_success(logger):
         assert result.read_text() == "Sample NIDM content"
 
 
-def test_copy_nidm_to_output_file_not_found(logger):
+def test_copy_and_prepare_nidm_file_not_found(logger):
     """Test error when source file doesn't exist"""
     with tempfile.TemporaryDirectory() as tmpdir:
         source_file = Path(tmpdir) / "nonexistent.ttl"
         output_dir = Path(tmpdir) / "output"
 
         with pytest.raises(FileNotFoundError):
-            copy_nidm_to_output(source_file, output_dir, logger)
+            copy_and_prepare_nidm(source_file, output_dir, logger)
 
 
-def test_copy_nidm_to_output_creates_directory(logger):
+def test_copy_and_prepare_nidm_creates_directory(logger):
     """Test that output directory is created if it doesn't exist"""
     with tempfile.TemporaryDirectory() as tmpdir:
         source_file = Path(tmpdir) / "nidm.ttl"
@@ -183,26 +183,26 @@ def test_copy_nidm_to_output_creates_directory(logger):
 
         output_dir = Path(tmpdir) / "new" / "nested" / "output"
 
-        result = copy_nidm_to_output(source_file, output_dir, logger)
+        result = copy_and_prepare_nidm(source_file, output_dir, logger)
 
         assert output_dir.exists()
         assert result.exists()
 
 
-def test_copy_nidm_to_output_same_path(logger):
+def test_copy_and_prepare_nidm_same_path(logger):
     """Test when input and output paths are the same"""
     with tempfile.TemporaryDirectory() as tmpdir:
         nidm_file = Path(tmpdir) / "nidm.ttl"
         nidm_file.write_text("Content")
 
         # Try to copy to same directory with same name
-        result = copy_nidm_to_output(nidm_file, Path(tmpdir), logger)
+        result = copy_and_prepare_nidm(nidm_file, Path(tmpdir), logger)
 
         # Should return same path without copying
         assert result == nidm_file
 
 
-def test_copy_nidm_to_output_preserves_metadata(logger):
+def test_copy_and_prepare_nidm_preserves_metadata(logger):
     """Test that file metadata is preserved during copy"""
     with tempfile.TemporaryDirectory() as tmpdir:
         source_file = Path(tmpdir) / "nidm.ttl"
@@ -212,7 +212,7 @@ def test_copy_nidm_to_output_preserves_metadata(logger):
         original_mtime = source_file.stat().st_mtime
 
         output_dir = Path(tmpdir) / "output"
-        result = copy_nidm_to_output(source_file, output_dir, logger)
+        result = copy_and_prepare_nidm(source_file, output_dir, logger)
 
         # Metadata should be preserved (shutil.copy2)
         assert result.stat().st_mtime == pytest.approx(original_mtime, abs=0.01)

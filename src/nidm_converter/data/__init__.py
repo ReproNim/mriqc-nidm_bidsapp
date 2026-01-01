@@ -24,7 +24,7 @@ def get_mriqc_dictionary() -> Path:
         Path to mriqc_dictionary_v1.csv
 
     Examples:
-        >>> from mriqc_nidm.data import get_mriqc_dictionary
+        >>> from nidm_converter.data import get_mriqc_dictionary
         >>> dict_path = get_mriqc_dictionary()
         >>> dict_path.exists()
         True
@@ -40,7 +40,7 @@ def get_software_metadata_template() -> Path:
         Path to mriqc_software_metadata.csv
 
     Examples:
-        >>> from mriqc_nidm.data import get_software_metadata_template
+        >>> from nidm_converter.data import get_software_metadata_template
         >>> template_path = get_software_metadata_template()
         >>> template_path.exists()
         True
@@ -66,7 +66,7 @@ def get_data_file(filename: str) -> Path:
         FileNotFoundError: If the file doesn't exist
 
     Examples:
-        >>> from mriqc_nidm.data import get_data_file
+        >>> from nidm_converter.data import get_data_file
         >>> dict_path = get_data_file("mriqc_dictionary_v1.csv")
         >>> dict_path.exists()
         True
