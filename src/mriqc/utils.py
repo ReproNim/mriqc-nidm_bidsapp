@@ -167,7 +167,7 @@ def setup_logging(
 
 def create_dataset_description(
     output_dir: Path,
-    app_name: str = "mriqc_nidm",
+    app_name: str = "mriqc-nidm_bidsapp",
     logger: logging.Logger = None
 ) -> Path:
     """
