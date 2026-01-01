@@ -23,7 +23,7 @@ def get_nidm_data_file(filename: str) -> Path:
         FileNotFoundError: If the file doesn't exist
 
     Examples:
-        >>> from nidm.nidm_utils import get_nidm_data_file
+        >>> from nidm_converter.nidm_utils import get_nidm_data_file
         >>> dict_path = get_nidm_data_file("mriqc_dictionary_v1.csv")
         >>> dict_path.exists()
         True
