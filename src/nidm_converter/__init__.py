@@ -26,7 +26,7 @@ from .nidm_utils import (
     normalize_session_label,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.1.0"
 
 __all__ = [
     "detect_existing_nidm",

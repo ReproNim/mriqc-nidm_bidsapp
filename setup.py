@@ -109,7 +109,7 @@ setup(
     package_dir={"": "src"},
     include_package_data=True,
     license="MIT",
-    url="https://github.com/yibeichan/mriqc-nidm_bidsapp",
+    url="https://github.com/sensein/mriqc-nidm_bidsapp",
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Science/Research",
@@ -122,7 +122,6 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            # Entry point for mriqc-nidm CLI
             "mriqc-nidm=mriqc.run:main",
         ],
     },

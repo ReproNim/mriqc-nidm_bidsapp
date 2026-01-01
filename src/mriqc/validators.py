@@ -158,7 +158,7 @@ def validate_output_directory(
         return False
 
     # Check write permissions
-    if not output_dir.is_dir() or not access_check_writable(output_dir):
+    if not access_check_writable(output_dir):
         logger.error(f"Output directory is not writable: {output_dir}")
         return False
 

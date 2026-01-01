@@ -405,7 +405,7 @@ MRIQC Arguments:
 
     # Create dataset description
     if not args.skip_nidm_conversion:
-        create_dataset_description(args.output_dir, logger)
+        create_dataset_description(args.output_dir, version=__version__, logger=logger)
 
     # Summary
     logger.info(f"Processing complete: {success_count}/{len(subjects)} subjects successful")

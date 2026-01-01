@@ -102,11 +102,11 @@ def build_nidm_output_path(
 
     Examples:
         >>> from pathlib import Path
-        >>> base = Path("/output/mriqc_nidm/nidm")
+        >>> base = Path("/output/mriqc-nidm_bidsapp/nidm")
         >>> build_nidm_output_path(base, "01")
-        PosixPath('/output/mriqc_nidm/nidm/sub-01')
+        PosixPath('/output/mriqc-nidm_bidsapp/nidm/sub-01')
         >>> build_nidm_output_path(base, "01", "baseline")
-        PosixPath('/output/mriqc_nidm/nidm/sub-01/ses-baseline')
+        PosixPath('/output/mriqc-nidm_bidsapp/nidm/sub-01/ses-baseline')
     """
     # Normalize labels (remove prefixes if present)
     subject_id = normalize_subject_label(subject_id)

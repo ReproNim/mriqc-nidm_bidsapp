@@ -168,6 +168,7 @@ def setup_logging(
 def create_dataset_description(
     output_dir: Path,
     app_name: str = "mriqc-nidm_bidsapp",
+    version: str = "unknown",
     logger: logging.Logger = None
 ) -> Path:
     """
@@ -176,6 +177,7 @@ def create_dataset_description(
     Args:
         output_dir: Output directory
         app_name: Application name (used in directory structure)
+        version: Application version
         logger: Optional logger instance
 
     Returns:
@@ -201,7 +203,7 @@ def create_dataset_description(
         "GeneratedBy": [
             {
                 "Name": "MRIQC-NIDM BIDSAPP",
-                "Version": "0.2.0",
+                "Version": version,
                 "CodeURL": "https://github.com/sensein/mriqc-nidm_bidsapp"
             }
         ],
