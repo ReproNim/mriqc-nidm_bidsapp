@@ -15,7 +15,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from mriqc.mriqc_runner import MRIQCWrapper
+from src.mriqc.mriqc_runner import MRIQCWrapper
 
 
 @pytest.fixture
@@ -47,7 +47,7 @@ def test_dirs(tmp_path):
 @pytest.fixture
 def mock_mriqc_version():
     """Mock MRIQC version check."""
-    with patch("mriqc.mriqc_runner.subprocess.run") as mock_run:
+    with patch("src.mriqc.mriqc_runner.subprocess.run") as mock_run:
         mock_result = Mock()
         mock_result.returncode = 0
         mock_result.stdout = "MRIQC v0.16.1\n"
@@ -106,7 +106,7 @@ class TestMRIQCWrapperInit:
 
     def test_init_handles_missing_mriqc(self, test_dirs):
         """Test that initialization raises error if MRIQC not found."""
-        with patch("mriqc.mriqc_runner.subprocess.run", side_effect=FileNotFoundError):
+        with patch("src.mriqc.mriqc_runner.subprocess.run", side_effect=FileNotFoundError):
             with pytest.raises(RuntimeError, match="MRIQC is not installed"):
                 MRIQCWrapper(
                     bids_dir=test_dirs["bids_dir"],
@@ -286,7 +286,7 @@ class TestMRIQCWrapperProcessing:
         output_file.write_text("{}")
 
         # Mock subprocess.run
-        with patch("mriqc.mriqc_runner.subprocess.run") as mock_run:
+        with patch("src.mriqc.mriqc_runner.subprocess.run") as mock_run:
             mock_result = Mock()
             mock_result.returncode = 0
             mock_result.stdout = "Success"
@@ -306,7 +306,7 @@ class TestMRIQCWrapperProcessing:
         )
 
         # Mock subprocess failure
-        with patch("mriqc.mriqc_runner.subprocess.run") as mock_run:
+        with patch("src.mriqc.mriqc_runner.subprocess.run") as mock_run:
             mock_result = Mock()
             mock_result.returncode = 1
             mock_result.stderr = "Error occurred"
@@ -330,7 +330,7 @@ class TestMRIQCWrapperProcessing:
         output_file.write_text("{}")
 
         # Mock subprocess (should not be called)
-        with patch("mriqc.mriqc_runner.subprocess.run") as mock_run:
+        with patch("src.mriqc.mriqc_runner.subprocess.run") as mock_run:
             result = wrapper.process_participant(subject_id="01", skip_existing=True)
 
             assert result is True
@@ -353,7 +353,7 @@ class TestMRIQCWrapperProcessing:
             output_file.write_text("{}")
 
         # Mock subprocess
-        with patch("mriqc.mriqc_runner.subprocess.run") as mock_run:
+        with patch("src.mriqc.mriqc_runner.subprocess.run") as mock_run:
             mock_result = Mock()
             mock_result.returncode = 0
             mock_result.stdout = "Success"
@@ -389,13 +389,13 @@ class TestMRIQCWrapperProcessing:
             output_file.write_text("{}")
 
         # Mock BIDSLayout
-        with patch("mriqc.mriqc_runner.BIDSLayout") as mock_layout:
+        with patch("src.mriqc.mriqc_runner.BIDSLayout") as mock_layout:
             mock_layout_instance = Mock()
             mock_layout_instance.get_subjects.return_value = ["01", "02"]
             mock_layout.return_value = mock_layout_instance
 
             # Mock subprocess
-            with patch("mriqc.mriqc_runner.subprocess.run") as mock_run:
+            with patch("src.mriqc.mriqc_runner.subprocess.run") as mock_run:
                 mock_result = Mock()
                 mock_result.returncode = 0
                 mock_result.stdout = "Success"

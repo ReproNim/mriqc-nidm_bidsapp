@@ -21,15 +21,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from mriqc import __version__
-from mriqc.mriqc_runner import MRIQCWrapper
-from mriqc.utils import (
+from . import __version__
+from .mriqc.mriqc_runner import MRIQCWrapper
+from .utils import (
     normalize_label,
     parse_mriqc_args,
     setup_logging,
     create_dataset_description,
 )
-from nidm_converter import (
+from .nidm_converter import (
     convert_csv_to_nidm,
     convert_mriqc_json_to_csv,
     copy_and_prepare_nidm,
@@ -37,11 +37,11 @@ from nidm_converter import (
     build_nidm_output_path,
     build_nidm_filename,
 )
-from nidm_converter.csv_to_nidm import check_csv2nidm_available
-from nidm_converter.data import get_mriqc_dictionary
+from .nidm_converter.csv_to_nidm import check_csv2nidm_available
+from .nidm_converter.data import get_mriqc_dictionary
 
 
-# Utility functions are now imported from mriqc.utils
+# Utility functions are now imported from src.utils
 # No duplicate definitions needed here
 
 

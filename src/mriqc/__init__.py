@@ -1,5 +1,5 @@
-"""MRIQC-NIDM BIDSAPP - Run MRIQC and convert outputs to NIDM format."""
+"""MRIQC wrapper module for executing MRIQC quality control."""
 
-__version__ = "0.1.0"
-__author__ = "ReproNim"
-__license__ = "MIT"
+from .mriqc_runner import MRIQCWrapper
+
+__all__ = ["MRIQCWrapper"]

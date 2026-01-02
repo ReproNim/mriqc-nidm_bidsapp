@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mriqc.run import process_subject
+from src.run import process_subject
 
 
 @pytest.fixture
@@ -80,9 +80,9 @@ class TestSessionHandling:
         create_mriqc_json(json_file, subject_id)
 
         # Mock conversion functions to test only JSON discovery
-        with patch("mriqc.run.convert_mriqc_json_to_csv") as mock_json2csv, \
-             patch("mriqc.run.convert_csv_to_nidm") as mock_csv2nidm, \
-             patch("mriqc.run.get_mriqc_dictionary") as mock_dict:
+        with patch("src.run.convert_mriqc_json_to_csv") as mock_json2csv, \
+             patch("src.run.convert_csv_to_nidm") as mock_csv2nidm, \
+             patch("src.run.get_mriqc_dictionary") as mock_dict:
 
             mock_json2csv.return_value = (Path("dummy.csv"), Path("dummy_software.csv"))
             mock_csv2nidm.return_value = True
@@ -117,9 +117,9 @@ class TestSessionHandling:
         create_mriqc_json(anat_file, subject_id)
         create_mriqc_json(func_file, subject_id)
 
-        with patch("mriqc.run.convert_mriqc_json_to_csv") as mock_json2csv, \
-             patch("mriqc.run.convert_csv_to_nidm") as mock_csv2nidm, \
-             patch("mriqc.run.get_mriqc_dictionary") as mock_dict:
+        with patch("src.run.convert_mriqc_json_to_csv") as mock_json2csv, \
+             patch("src.run.convert_csv_to_nidm") as mock_csv2nidm, \
+             patch("src.run.get_mriqc_dictionary") as mock_dict:
 
             mock_json2csv.return_value = (Path("dummy.csv"), Path("dummy_software.csv"))
             mock_csv2nidm.return_value = True
@@ -156,9 +156,9 @@ class TestSessionHandling:
         )
         create_mriqc_json(json_file, subject_id, session_id)
 
-        with patch("mriqc.run.convert_mriqc_json_to_csv") as mock_json2csv, \
-             patch("mriqc.run.convert_csv_to_nidm") as mock_csv2nidm, \
-             patch("mriqc.run.get_mriqc_dictionary") as mock_dict:
+        with patch("src.run.convert_mriqc_json_to_csv") as mock_json2csv, \
+             patch("src.run.convert_csv_to_nidm") as mock_csv2nidm, \
+             patch("src.run.get_mriqc_dictionary") as mock_dict:
 
             mock_json2csv.return_value = (Path("dummy.csv"), Path("dummy_software.csv"))
             mock_csv2nidm.return_value = True
@@ -195,9 +195,9 @@ class TestSessionHandling:
             )
             create_mriqc_json(json_file, subject_id, session_id)
 
-        with patch("mriqc.run.convert_mriqc_json_to_csv") as mock_json2csv, \
-             patch("mriqc.run.convert_csv_to_nidm") as mock_csv2nidm, \
-             patch("mriqc.run.get_mriqc_dictionary") as mock_dict:
+        with patch("src.run.convert_mriqc_json_to_csv") as mock_json2csv, \
+             patch("src.run.convert_csv_to_nidm") as mock_csv2nidm, \
+             patch("src.run.get_mriqc_dictionary") as mock_dict:
 
             mock_json2csv.return_value = (Path("dummy.csv"), Path("dummy_software.csv"))
             mock_csv2nidm.return_value = True
@@ -242,9 +242,9 @@ class TestSessionHandling:
             )
             create_mriqc_json(func_file, subject_id, session_id)
 
-        with patch("mriqc.run.convert_mriqc_json_to_csv") as mock_json2csv, \
-             patch("mriqc.run.convert_csv_to_nidm") as mock_csv2nidm, \
-             patch("mriqc.run.get_mriqc_dictionary") as mock_dict:
+        with patch("src.run.convert_mriqc_json_to_csv") as mock_json2csv, \
+             patch("src.run.convert_csv_to_nidm") as mock_csv2nidm, \
+             patch("src.run.get_mriqc_dictionary") as mock_dict:
 
             mock_json2csv.return_value = (Path("dummy.csv"), Path("dummy_software.csv"))
             mock_csv2nidm.return_value = True
@@ -363,9 +363,9 @@ class TestSessionHandlingDeterminism:
             )
             create_mriqc_json(json_file, subject_id, session_id)
 
-        with patch("mriqc.run.convert_mriqc_json_to_csv") as mock_json2csv, \
-             patch("mriqc.run.convert_csv_to_nidm") as mock_csv2nidm, \
-             patch("mriqc.run.get_mriqc_dictionary") as mock_dict:
+        with patch("src.run.convert_mriqc_json_to_csv") as mock_json2csv, \
+             patch("src.run.convert_csv_to_nidm") as mock_csv2nidm, \
+             patch("src.run.get_mriqc_dictionary") as mock_dict:
 
             mock_json2csv.return_value = (Path("dummy.csv"), Path("dummy_software.csv"))
             mock_csv2nidm.return_value = True

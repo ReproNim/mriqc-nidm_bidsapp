@@ -1,8 +1,17 @@
+import json
 import subprocess
 import sys
 from pathlib import Path
 
 from setuptools import find_packages, setup
+
+
+def get_version():
+    """Read version from VERSION file"""
+    version_file = Path(__file__).parent / "VERSION"
+    with open(version_file) as f:
+        data = json.load(f)
+        return data["mriqc_nidm_bidsapp"]["version"]
 
 
 def read_requirements():
@@ -101,12 +110,11 @@ if len(sys.argv) > 1 and sys.argv[1] in ["docker", "singularity", "containers"]:
 
 setup(
     name="mriqc-nidm_bidsapp",
-    version="0.1.0",
+    version=get_version(),
     description="BIDS App for MRIQC with NIDM Output",
     author="ReproNim",
     author_email="repronim@gmail.com",
-    packages=find_packages(where="src"),
-    package_dir={"": "src"},
+    packages=find_packages(),
     include_package_data=True,
     license="MIT",
     url="https://github.com/sensein/mriqc-nidm_bidsapp",
@@ -122,7 +130,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "mriqc-nidm=mriqc.run:main",
+            "mriqc-nidm=src.run:main",
         ],
     },
     python_requires=">=3.9",

@@ -15,11 +15,12 @@ A BIDS App that runs MRIQC quality control on neuroimaging data and converts the
 ```
 .
 ├── src/
-│   ├── mriqc/                        # MRIQC analysis package
-│   │   ├── run.py                    # CLI entry point
-│   │   ├── mriqc_runner.py           # MRIQC execution wrapper
-│   │   ├── utils.py                  # Utility functions
-│   │   └── validators.py             # Input validation
+│   ├── __init__.py                   # Package version and metadata
+│   ├── run.py                        # CLI entry point
+│   ├── utils.py                      # Utility functions
+│   ├── validators.py                 # Input validation
+│   ├── mriqc/                        # MRIQC wrapper module
+│   │   └── mriqc_runner.py           # MRIQC execution wrapper
 │   └── nidm_converter/               # NIDM conversion package
 │       ├── nidm_converter.py         # NIDM detection and copying
 │       ├── json_to_csv.py            # MRIQC JSON to CSV conversion
@@ -31,7 +32,7 @@ A BIDS App that runs MRIQC quality control on neuroimaging data and converts the
 ├── tests/                            # Comprehensive test suite
 ├── setup.py                          # Package configuration
 ├── requirements.txt                  # Python dependencies
-├── Singularity                     # Singularity/Apptainer definition
+├── Singularity                       # Singularity/Apptainer definition
 └── Dockerfile                        # Docker definition
 ```
 

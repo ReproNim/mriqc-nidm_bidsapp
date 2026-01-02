@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from bids import BIDSLayout, __version__ as bids_version
 
-from . import __version__
+from .. import __version__
 
 # Configure logging
 logger = logging.getLogger("mriqc-nidm.wrapper")
