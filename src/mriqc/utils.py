@@ -207,7 +207,7 @@ def create_dataset_description(
                 "CodeURL": "https://github.com/sensein/mriqc-nidm_bidsapp"
             }
         ],
-        "HowToAcknowledge": "Please cite MRIQC and NIDM papers",
+        "HowToAcknowledge": "Please cite MRIQC (https://doi.org/10.1371/journal.pone.0184661) and NIDM (http://nidm.nidash.org/)",
     }
 
     desc_file = nidm_dir / "dataset_description.json"
