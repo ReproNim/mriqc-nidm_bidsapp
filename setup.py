@@ -114,7 +114,7 @@ setup(
     description="BIDS App for MRIQC with NIDM Output",
     author="ReproNim",
     author_email="repronim@gmail.com",
-    packages=find_packages(),
+    packages=find_packages(exclude=["tests", "tests.*"]),
     include_package_data=True,
     license="MIT",
     url="https://github.com/sensein/mriqc-nidm_bidsapp",
