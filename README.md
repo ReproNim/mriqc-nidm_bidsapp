@@ -77,11 +77,10 @@ docker run -v /path/to/mriqc/output:/data -v /path/to/output:/out mriqc-nidm_bid
 The app runs MRIQC quality control and converts outputs to NIDM format. It can augment existing NIDM files with MRIQC metrics, making it suitable for integrating QC data into existing analysis provenance graphs.
 
 ```bash
-mriqc-nidm_bidsapp <bids_dir> <output_dir> participant \
+mriqc-nidm <bids_dir> <output_dir> participant \
   --participant-label <subject_id> \
   --nidm-input-dir <nidm_dir> \
   [options]
-```
 
 ### Required Arguments
 
