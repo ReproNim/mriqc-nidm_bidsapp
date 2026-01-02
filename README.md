@@ -31,7 +31,7 @@ A BIDS App that runs MRIQC quality control on neuroimaging data and converts the
 ├── tests/                            # Comprehensive test suite
 ├── setup.py                          # Package configuration
 ├── requirements.txt                  # Python dependencies
-├── Singularity                  # Singularity/Apptainer definition
+├── Singularity                     # Singularity/Apptainer definition
 └── Dockerfile                        # Docker definition
 ```
 
