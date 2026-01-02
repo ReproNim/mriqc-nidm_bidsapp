@@ -6,7 +6,7 @@ def get_version():
     """Read version from VERSION file"""
     # If installed as a package, VERSION should be in the root of the package
     # or one level up from this file's directory if in src structure
-    version_file = Path(__file__).parent.parent.parent / "VERSION"
+    version_file = Path(__file__).parent.parent / "VERSION"
     if not version_file.exists():
         # Fallback for installed package where VERSION might be elsewhere
         # or if we are in a different structure
