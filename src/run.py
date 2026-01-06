@@ -265,8 +265,11 @@ MRIQC Arguments:
     parser.add_argument(
         "--nidm-input-dir",
         type=Path,
-        required=True,
-        help="Directory containing existing NIDM files (required for NIDM augmentation)",
+        help=(
+            "Directory containing existing NIDM files for augmentation. "
+            "If not provided, will auto-detect at <BIDS_DIR>/../NIDM/ "
+            "(standard convention location)."
+        ),
     )
     parser.add_argument(
         "--skip-mriqc",
