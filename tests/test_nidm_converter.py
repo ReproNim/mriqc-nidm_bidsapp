@@ -144,6 +144,27 @@ def test_detect_existing_nidm_no_logger():
         assert result == nidm_file
 
 
+def test_detect_existing_nidm_session_directory(logger):
+    """Prefer a session-specific NIDM document when a session is requested."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        nidm_input_dir = Path(tmpdir) / "NIDM"
+        subject_dir = nidm_input_dir / "sub-01"
+        session_dir = subject_dir / "ses-baseline"
+        session_dir.mkdir(parents=True)
+        (subject_dir / "subject.ttl").touch()
+        session_file = session_dir / "sub-01_ses-baseline.ttl"
+        session_file.touch()
+
+        result = detect_existing_nidm(
+            subject_id="01",
+            session_id="ses-baseline",
+            nidm_input_dir=nidm_input_dir,
+            logger=logger,
+        )
+
+        assert result == session_file
+
+
 # Tests for copy_and_prepare_nidm
 def test_copy_and_prepare_nidm_success(logger):
     """Test successful copy of NIDM file"""

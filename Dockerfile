@@ -37,4 +37,4 @@ RUN micromamba install -n base -y -c conda-forge \
 # Runtime Configuration
 # =======================================
 # Entrypoint that expects input/output paths as arguments
-ENTRYPOINT ["python3", "/opt/src/mriqc_nidm/run.py"]
+ENTRYPOINT ["mriqc-nidm"]

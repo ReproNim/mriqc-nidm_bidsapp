@@ -1,0 +1,49 @@
+# Example BABS configuration for mriqc-nidm 0.1.0 using the BIDS-study layout
+# added by PennLINC/babs PR #369.
+
+analysis_path: "."
+input_ria_path: ".babs/input_ria"
+output_ria_path: ".babs/output_ria"
+
+input_datasets:
+    BIDS:
+        required_files:
+            - "anat/*_T1w.nii*"
+        is_zipped: false
+        origin_url: "/path/to/BIDS"
+        path_in_babs: sourcedata/BIDS
+
+bids_app_args:
+    $SUBJECT_SELECTION_FLAG: "--participant-label"
+    # For a BABS project initialized with processing level "session", uncomment:
+    # $SESSION_SELECTION_FLAG: "--session-label"
+    --nprocs: "4"
+    --omp-nthreads: "2"
+    # If an existing NIDM dataset is available in sourcedata/NIDM, configure it
+    # explicitly instead of relying on sibling-path discovery:
+    # --nidm-input-dir: '"${PWD}"/sourcedata/NIDM'
+
+singularity_args:
+    - --cleanenv
+    - --containall
+    - --writable-tmpfs
+
+zip_foldernames:
+    mriqc-nidm_bidsapp: "0-1-0"
+
+cluster_resources:
+    interpreting_shell: "/bin/bash"
+    hard_runtime_limit: "12:00:00"
+    temporary_disk_space: 50G
+    customized_text: |
+        #SBATCH --nodes=1
+        #SBATCH --ntasks=1
+        #SBATCH --cpus-per-task=4
+        #SBATCH --mem=16G
+        #SBATCH --propagate=NONE
+
+script_preamble: |
+    # Load site-specific Apptainer/DataLad modules or activate BABS here.
+    module load apptainer
+
+job_compute_space: "/path/to/temporary_compute_space"

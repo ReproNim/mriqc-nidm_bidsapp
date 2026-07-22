@@ -218,6 +218,49 @@ class TestSessionHandling:
             assert result is True
             assert mock_json2csv.call_count == 3
 
+    def test_explicit_session_only_processes_requested_session(
+        self, mock_bids_dir, mock_output_dir, logger, tmp_path
+    ):
+        """An explicit BABS session must not merge another session's IQMs."""
+        mriqc_dir = tmp_path / "mriqc"
+        subject_id = "01"
+
+        for session_id in ["01", "02"]:
+            json_file = (
+                mriqc_dir
+                / f"sub-{subject_id}"
+                / f"ses-{session_id}"
+                / "anat"
+                / f"sub-{subject_id}_ses-{session_id}_T1w.json"
+            )
+            create_mriqc_json(json_file, subject_id, session_id)
+
+        with patch("src.run.convert_mriqc_json_to_csv") as mock_json2csv, patch(
+            "src.run.convert_csv_to_nidm"
+        ) as mock_csv2nidm, patch("src.run.get_mriqc_dictionary") as mock_dict:
+            mock_json2csv.return_value = (
+                Path("dummy.csv"),
+                Path("dummy_software.csv"),
+            )
+            mock_csv2nidm.return_value = True
+            mock_dict.return_value = Path("dummy_dict.csv")
+
+            result = process_subject(
+                subject_id=subject_id,
+                session_id="ses-02",
+                bids_dir=mock_bids_dir,
+                output_dir=mock_output_dir,
+                mriqc_dir=mriqc_dir,
+                nidm_input_dir=None,
+                skip_mriqc=True,
+                skip_nidm=False,
+                logger=logger,
+            )
+
+        assert result is True
+        mock_json2csv.assert_called_once()
+        assert mock_json2csv.call_args.args[0].name == "sub-01_ses-02_T1w.json"
+
     def test_session_dataset_multiple_sessions_multiple_datatypes(
         self, mock_bids_dir, mock_output_dir, logger, tmp_path
     ):

@@ -5,8 +5,12 @@ Unit tests for the run module.
 These tests verify the CLI argument parsing and passthrough functionality.
 """
 
+import sys
+from unittest.mock import patch
+
 import pytest
 
+from src.run import main
 from src.utils import parse_mriqc_args
 
 
@@ -96,3 +100,38 @@ class TestParseMriqcArgs:
         assert result["mem"] == "16G"
         assert result["nprocs"] == 12
         assert result["omp_nthreads"] == 8
+
+
+def test_main_forwards_babs_session_to_mriqc_and_conversion(tmp_path):
+    """BABS's outer --session-label reaches both processing stages."""
+    bids_dir = tmp_path / "BIDS"
+    output_dir = tmp_path / "output"
+    (bids_dir / "sub-01" / "ses-baseline").mkdir(parents=True)
+
+    argv = [
+        "mriqc-nidm",
+        str(bids_dir),
+        str(output_dir),
+        "participant",
+        "--participant-label",
+        "sub-01",
+        "--session-label",
+        "ses-baseline",
+        "--skip-nidm-conversion",
+    ]
+
+    with patch.object(sys, "argv", argv):
+        with patch("src.run.MRIQCWrapper") as wrapper_cls:
+            with patch(
+                "src.run.process_subject", return_value=True
+            ) as process_subject_mock:
+                result = main()
+
+    assert result == 0
+    wrapper_cls.return_value.process_participant.assert_called_once()
+    assert (
+        wrapper_cls.return_value.process_participant.call_args.kwargs["session_id"]
+        == "baseline"
+    )
+    process_subject_mock.assert_called_once()
+    assert process_subject_mock.call_args.kwargs["session_id"] == "baseline"

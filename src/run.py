@@ -54,12 +54,14 @@ def process_subject(
     skip_mriqc: bool,
     skip_nidm: bool,
     logger: logging.Logger,
+    session_id: Optional[str] = None,
 ) -> bool:
     """
     Process a single subject through the MRIQC → NIDM pipeline.
 
     Args:
         subject_id: Subject identifier (without 'sub-' prefix)
+        session_id: Optional session identifier (without 'ses-' prefix)
         bids_dir: BIDS dataset directory
         output_dir: Output directory
         mriqc_dir: MRIQC output directory
@@ -71,12 +73,17 @@ def process_subject(
     Returns:
         True if successful, False otherwise
     """
-    logger.info(f"Processing subject: sub-{subject_id}")
+    session_id = normalize_label(session_id, "ses-") if session_id else None
+    participant_id = f"sub-{subject_id}"
+    if session_id:
+        participant_id += f"_ses-{session_id}"
+    logger.info(f"Processing subject/session: {participant_id}")
 
     try:
         # Step 1: Detect existing NIDM input
         existing_nidm = detect_existing_nidm(
             subject_id=subject_id,
+            session_id=session_id,
             nidm_input_dir=nidm_input_dir,
             bids_dir=bids_dir if not nidm_input_dir else None,
             logger=logger
@@ -85,6 +92,8 @@ def process_subject(
         # Step 2: Find MRIQC outputs
         # Look for MRIQC JSON files in the MRIQC output directory
         subject_mriqc_dir = mriqc_dir / f"sub-{subject_id}"
+        if session_id:
+            subject_mriqc_dir = subject_mriqc_dir / f"ses-{session_id}"
 
         if not subject_mriqc_dir.exists():
             logger.warning(f"No MRIQC output directory found for sub-{subject_id}: {subject_mriqc_dir}")
@@ -118,7 +127,8 @@ def process_subject(
         # BABS runs session by session, so all files in one run share the same session
         # Filename pattern: sub-01_ses-01_T1w.json or sub-01_T1w.json
         session_match = re.search(r"_ses-([a-zA-Z0-9]+)", json_files[0].name)
-        session_id = session_match.group(1) if session_match else None
+        if session_id is None:
+            session_id = session_match.group(1) if session_match else None
         if session_id:
             logger.info(f"Session detected: ses-{session_id}")
 
@@ -357,6 +367,18 @@ MRIQC Arguments:
 
     logger.info(f"Processing {len(subjects)} subject(s): {', '.join(subjects)}")
 
+    sessions = None
+    if args.session_label:
+        sessions = [normalize_label(s, "ses-") for s in args.session_label]
+        requested_sessions = ", ".join(f"ses-{s}" for s in sessions)
+        logger.info(f"Requested session(s): {requested_sessions}")
+
+    work_items = [
+        (subject_id, session_id)
+        for subject_id in subjects
+        for session_id in (sessions or [None])
+    ]
+
     # Run MRIQC if not skipped
     if not skip_mriqc:
         logger.info("Running MRIQC quality control...")
@@ -373,16 +395,20 @@ MRIQC Arguments:
             )
 
             # Process participants with extra MRIQC args
-            for subject_id in subjects:
-                logger.info(f"Running MRIQC for sub-{subject_id}")
+            for subject_id, session_id in work_items:
+                participant_id = f"sub-{subject_id}"
+                if session_id:
+                    participant_id += f"_ses-{session_id}"
+                logger.info(f"Running MRIQC for {participant_id}")
                 try:
                     mriqc_wrapper.process_participant(
                         subject_id=subject_id,
+                        session_id=session_id,
                         verbose_count=1 if args.verbose else 0,
                         **mriqc_kwargs,
                     )
                 except Exception as e:
-                    logger.error(f"MRIQC failed for sub-{subject_id}: {e}")
+                    logger.error(f"MRIQC failed for {participant_id}: {e}")
                     continue
 
             logger.info("MRIQC execution completed")
@@ -393,9 +419,10 @@ MRIQC Arguments:
 
     # Process each subject through NIDM conversion
     success_count = 0
-    for subject_id in subjects:
+    for subject_id, session_id in work_items:
         if process_subject(
             subject_id=subject_id,
+            session_id=session_id,
             bids_dir=args.bids_dir,
             output_dir=args.output_dir,
             mriqc_dir=mriqc_dir,
@@ -411,10 +438,10 @@ MRIQC Arguments:
         create_dataset_description(args.output_dir, version=__version__, logger=logger)
 
     # Summary
-    logger.info(f"Processing complete: {success_count}/{len(subjects)} subjects successful")
+    logger.info(f"Processing complete: {success_count}/{len(work_items)} jobs successful")
 
-    if success_count == len(subjects):
-        logger.info("All subjects processed successfully")
+    if success_count == len(work_items):
+        logger.info("All subject/session jobs processed successfully")
         return 0
     elif success_count > 0:
         logger.warning("Some subjects failed to process")

@@ -82,6 +82,7 @@ mriqc-nidm <bids_dir> <output_dir> participant \
   --participant-label <subject_id> \
   --nidm-input-dir <nidm_dir> \
   [options]
+```
 
 ### Required Arguments
 
@@ -149,6 +150,32 @@ mriqc-nidm /data/bids /data/output participant \
   --participant-label 001 \
   --skip-nidm-conversion
 ```
+
+## BABS compatibility
+
+The app supports both the original BABS project layout and the configurable
+BIDS-study layout introduced by
+[PennLINC/babs PR #369](https://github.com/PennLINC/babs/pull/369). The new
+layout places the analysis DataLad dataset at the project root and its RIA
+stores beneath `.babs/`:
+
+```yaml
+analysis_path: "."
+input_ria_path: ".babs/input_ria"
+output_ria_path: ".babs/output_ria"
+```
+
+See
+[`examples/babs-mriqc-nidm-bids-study.yaml`](examples/babs-mriqc-nidm-bids-study.yaml)
+for a complete template. It requires a BABS revision containing PR #369. Omit
+the three path settings to use the legacy layout.
+
+BABS invokes the positional analysis level `participant` for session-wise jobs
+and supplies the session through `$SESSION_SELECTION_FLAG`. For session-level
+projects, configure that placeholder as `--session-label`; the app forwards the
+requested session to MRIQC and restricts NIDM conversion to that session's JSON
+outputs. Configure `--nidm-input-dir` explicitly when augmenting an upstream
+NIDM dataset.
 
 ## Development
 
