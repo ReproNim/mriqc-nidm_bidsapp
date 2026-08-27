@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from nidm_converter.nidm_converter import (
+from src.nidm_converter.nidm_converter import (
     copy_and_prepare_nidm,
     detect_existing_nidm,
     get_supported_nidm_formats,
