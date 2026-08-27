@@ -36,5 +36,9 @@ RUN micromamba install -n base -y -c conda-forge \
 # =======================================
 # Runtime Configuration
 # =======================================
-# Entrypoint that expects input/output paths as arguments
-ENTRYPOINT ["python3", "/opt/src/mriqc_nidm/run.py"]
+# Use the console script registered by setup.py ("mriqc-nidm=src.run:main").
+# Do NOT invoke src/run.py as a file: it uses package-relative imports
+# ("from . import __version__"), so `python3 /opt/src/run.py` fails with
+# ImportError. This matches Singularity's %runscript, which is the entry point
+# that is actually exercised on the cluster.
+ENTRYPOINT ["mriqc-nidm"]

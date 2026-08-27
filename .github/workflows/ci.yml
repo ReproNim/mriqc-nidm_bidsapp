@@ -1,0 +1,79 @@
+name: MRIQC-NIDM BIDS App CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    # Skip the workflow if the commit message contains [skip CI]
+    if: "!contains(github.event.head_commit.message, '[skip CI]')"
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov flake8
+        pip install -e .
+
+    - name: Lint with flake8
+      run: |
+        # stop the build if there are Python syntax errors or undefined names
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        # exit-zero treats all errors as warnings
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+    - name: Test with pytest
+      run: |
+        pytest --cov=src tests/
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    # Runs on PRs too, not just push-to-main. Gating image builds on push-only is
+    # how the sibling freesurfer app let a broken build sit undetected for months;
+    # the PR is where a broken Dockerfile has to be caught. head_commit only
+    # exists on push events, so the skip-CI check is scoped to push and this job
+    # always runs on pull_request.
+    if: "github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip CI]')"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build Docker image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: ./Dockerfile
+        push: false
+        load: true
+        tags: mriqc-nidm:test
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Smoke-test the entrypoint
+      # Proves the image's ENTRYPOINT actually resolves and runs. Building alone
+      # does not: the previous ENTRYPOINT pointed at /opt/src/mriqc_nidm/run.py,
+      # a path that has never existed in this repo, and the build was still green.
+      run: |
+        docker run --rm mriqc-nidm:test --version
+        docker run --rm mriqc-nidm:test --help
+
+  # NOTE: no singularity job on purpose. `singularity build` from a definition
+  # file hangs for hours on GitHub-hosted runners (unprivileged user-namespace
+  # restriction) rather than failing -- see ReproNim/freesurfer-nidm_bidsapp#12.
+  # The .sif is built and validated on the HPC cluster instead.

@@ -14,9 +14,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from bids import BIDSLayout, __version__ as bids_version
+from bids import BIDSLayout
 
 from .. import __version__
+from ..utils import BIDS_VERSION
 
 # Configure logging
 logger = logging.getLogger("mriqc-nidm.wrapper")
@@ -520,7 +521,7 @@ class MRIQCWrapper:
 
         description = {
             "Name": "MRIQC - MRI Quality Control",
-            "BIDSVersion": bids_version,
+            "BIDSVersion": BIDS_VERSION,
             "DatasetType": "derivative",
             "GeneratedBy": [
                 {

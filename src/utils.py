@@ -10,6 +10,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
+# BIDS specification version declared in the dataset_description.json files this
+# app writes. This is the *spec* version, never a library version (pybids'
+# __version__ is the library, not the spec -- conflating the two is the bug this
+# constant exists to prevent). Kept in sync with freesurfer-nidm_bidsapp.
+BIDS_VERSION = "1.8.0"
+
 
 def normalize_label(label: str, prefix: str) -> str:
     """
@@ -198,7 +204,7 @@ def create_dataset_description(
 
     dataset_desc = {
         "Name": "MRIQC Quality Control Metrics (NIDM)",
-        "BIDSVersion": "1.6.0",
+        "BIDSVersion": BIDS_VERSION,
         "DatasetType": "derivative",
         "GeneratedBy": [
             {
@@ -219,6 +225,7 @@ def create_dataset_description(
 
 
 __all__ = [
+    "BIDS_VERSION",
     "normalize_label",
     "normalize_participant_labels",
     "normalize_session_labels",
