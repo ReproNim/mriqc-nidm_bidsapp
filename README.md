@@ -53,12 +53,22 @@ The package name (`mriqc-nidm`) is shorter for usability, while output directory
 
 1. Build the container:
 ```bash
-apptainer build mriqc-nidm_bidsapp.sif Singularity
+apptainer build --fakeroot mriqc-nidm_bidsapp.sif Singularity
 ```
 
-2. Run the container:
+> **Building on a cluster:** if your site's apptainer module exports
+> `APPTAINER_BINDPATH` (MIT ORCD sets `/orcd,/nfs`), unset it for the build.
+> Those paths exist on the host but not inside the base image, so `%post` dies
+> with `destination /nfs doesn't exist in container`. It is only needed at run
+> time:
+> ```bash
+> env -u APPTAINER_BINDPATH apptainer build --fakeroot mriqc-nidm_bidsapp.sif Singularity
+> ```
+
+2. Run the container — the first positional argument is the **BIDS** directory:
 ```bash
-apptainer run mriqc-nidm_bidsapp.sif /path/to/mriqc/output /path/to/output participant
+apptainer run -B $PWD mriqc-nidm_bidsapp.sif \
+  /path/to/bids /path/to/output participant --participant-label 01
 ```
 
 ### Using Docker
