@@ -12,7 +12,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from nidm_converter.json_to_csv import (
+from src.nidm_converter.json_to_csv import (
     convert_mriqc_json_to_csv,
     create_software_metadata_csv,
     extract_bids_info,

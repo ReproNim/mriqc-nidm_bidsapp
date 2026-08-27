@@ -10,6 +10,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
+# BIDS specification version declared in the dataset_description.json files this
+# app writes. This is the *spec* version, never a library version (pybids'
+# __version__ is the library, not the spec -- conflating the two is the bug this
+# constant exists to prevent). Kept in sync with freesurfer-nidm_bidsapp.
+BIDS_VERSION = "1.8.0"
+
 
 def normalize_label(label: str, prefix: str) -> str:
     """
@@ -167,16 +173,18 @@ def setup_logging(
 
 def create_dataset_description(
     output_dir: Path,
-    app_name: str = "mriqc-nidm_bidsapp",
     version: str = "unknown",
     logger: logging.Logger = None
 ) -> Path:
     """
-    Create dataset_description.json for NIDM derivatives.
+    Create dataset_description.json at the derivative root.
+
+    Written beside the sub-* directories, NOT inside them: the per-subject
+    directory is what BABS zips, so a copy placed there would be duplicated into
+    every subject's zip and the copies would fight over the same path on merge.
 
     Args:
-        output_dir: Output directory
-        app_name: Application name (used in directory structure)
+        output_dir: Derivative root (the app's output_dir)
         version: Application version
         logger: Optional logger instance
 
@@ -193,12 +201,12 @@ def create_dataset_description(
     if logger is None:
         logger = logging.getLogger(__name__)
 
-    nidm_dir = output_dir / app_name / "nidm"
-    nidm_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     dataset_desc = {
         "Name": "MRIQC Quality Control Metrics (NIDM)",
-        "BIDSVersion": "1.6.0",
+        "BIDSVersion": BIDS_VERSION,
         "DatasetType": "derivative",
         "GeneratedBy": [
             {
@@ -210,7 +218,7 @@ def create_dataset_description(
         "HowToAcknowledge": "Please cite MRIQC (https://doi.org/10.1371/journal.pone.0184661) and NIDM (http://nidm.nidash.org/)",
     }
 
-    desc_file = nidm_dir / "dataset_description.json"
+    desc_file = output_dir / "dataset_description.json"
     with open(desc_file, "w") as f:
         json.dump(dataset_desc, f, indent=2)
 
@@ -219,6 +227,7 @@ def create_dataset_description(
 
 
 __all__ = [
+    "BIDS_VERSION",
     "normalize_label",
     "normalize_participant_labels",
     "normalize_session_labels",

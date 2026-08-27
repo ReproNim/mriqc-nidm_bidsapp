@@ -14,9 +14,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from bids import BIDSLayout, __version__ as bids_version
+from bids import BIDSLayout
 
 from .. import __version__
+from ..utils import BIDS_VERSION
 
 # Configure logging
 logger = logging.getLogger("mriqc-nidm.wrapper")
@@ -51,15 +52,19 @@ class MRIQCWrapper:
         """
         self.bids_dir = Path(bids_dir)
         self.output_dir = Path(output_dir)
-        self.mriqc_dir = self.output_dir / "mriqc-nidm_bidsapp" / "mriqc"
-        self.work_dir = Path(work_dir) if work_dir else self.output_dir / "work"
+        # Fallback only. Callers pass subject_output_dir=<out>/sub-<id>[/ses-<x>]/mriqc
+        # per participant; this default exists for direct wrapper use and is
+        # dot-prefixed so it is never picked up as a subject directory or zipped.
+        self.mriqc_dir = self.output_dir / ".mriqc"
+        # Work dir is scratch: dot-prefixed and outside any sub-<id>/ directory so
+        # it never lands in a subject's zip.
+        self.work_dir = Path(work_dir) if work_dir else self.output_dir / ".mriqc_work"
 
         # Track processing results
         self.results = {"success": [], "failure": [], "skipped": []}
 
         # Ensure output directories exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.mriqc_dir.mkdir(parents=True, exist_ok=True)
         self.work_dir.mkdir(parents=True, exist_ok=True)
 
         # Check MRIQC installation
@@ -496,6 +501,7 @@ class MRIQCWrapper:
         summary["timestamp"] = datetime.now().isoformat()
         summary["mriqc_version"] = self.mriqc_version
 
+        self.mriqc_dir.mkdir(parents=True, exist_ok=True)
         output_path = self.mriqc_dir / "processing_summary.json"
         with open(output_path, "w") as f:
             json.dump(summary, f, indent=2)
@@ -512,6 +518,7 @@ class MRIQCWrapper:
         Path
             Path to created dataset_description.json
         """
+        self.mriqc_dir.mkdir(parents=True, exist_ok=True)
         desc_file = self.mriqc_dir / "dataset_description.json"
 
         if desc_file.exists():
@@ -520,7 +527,7 @@ class MRIQCWrapper:
 
         description = {
             "Name": "MRIQC - MRI Quality Control",
-            "BIDSVersion": bids_version,
+            "BIDSVersion": BIDS_VERSION,
             "DatasetType": "derivative",
             "GeneratedBy": [
                 {
