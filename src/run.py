@@ -135,10 +135,10 @@ def process_subject(
             logger.info("Skipping NIDM conversion (--skip-nidm-conversion flag)")
             return True
 
-        # Step 3: Process each MRIQC JSON file
-        # Extract session info from first JSON file (if present)
-        # BABS runs session by session, so all files in one run share the same session
-        # Filename pattern: sub-01_ses-01_T1w.json or sub-01_T1w.json
+        # Step 3: Process each MRIQC JSON file.
+        # The session is decided by the caller (--session-label), not sniffed from
+        # filenames -- it determines the output directory, so it has to be known
+        # before MRIQC runs, not after.
         # If the caller did not pin a session, warn when MRIQC produced more than
         # one: everything then lands in a single subject-level nidm.ttl. BABS
         # session-level runs always pass --session-label, so this is the
