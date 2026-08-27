@@ -42,7 +42,7 @@ This repository uses consistent naming:
 - **Repository name:** `mriqc-nidm_bidsapp` (this GitHub repository)
 - **Package name:** `mriqc-nidm` (installed via pip)
 - **CLI command:** `mriqc-nidm` (shorter for usability)
-- **Output directory:** `mriqc-nidm_bidsapp/` (created in output folder)
+- **Output directory:** `sub-{id}/` per subject, directly in the output folder
 - **Container name:** `mriqc-nidm_bidsapp-<version>`
 
 The package name (`mriqc-nidm`) is shorter for usability, while output directory matches repository name.
@@ -102,20 +102,35 @@ mriqc-nidm <bids_dir> <output_dir> participant \
 
 ### Output Structure
 
+Everything this app produces for a subject lives under that subject's own
+directory, with `nidm.ttl` beside the analysis results:
+
 ```
 output_dir/
-└── mriqc-nidm_bidsapp/          # All outputs packaged together
-    ├── mriqc/                   # MRIQC outputs (JSON, HTML, figures)
-    │   └── sub-{id}/
-    │       └── [ses-{label}/]   # Session subdirectory if applicable
-    └── nidm/                    # NIDM outputs (TTL files)
-        ├── dataset_description.json
+├── dataset_description.json     # derivative root, written once
+└── sub-{id}/                    # [/ses-{label}/] when --session-label is given
+    ├── nidm.ttl                 # input NIDM + this app's MRIQC metrics
+    └── mriqc/                   # MRIQC outputs (IQM JSON, HTML reports, logs)
         └── sub-{id}/
-            └── [ses-{label}/]   # Session subdirectory if applicable
-                └── sub-{id}[_ses-{label}].ttl
+            └── [ses-{label}/]
+                └── {anat,func}/*.json
 ```
 
-The output follows BIDS derivatives structure with subject/session-specific subdirectories. The app automatically copies existing NIDM files before augmentation, ensuring originals are never overwritten.
+The NIDM product is **always** named `nidm.ttl`. Subject identity is carried by
+the containing directory, never by the filename — this is what lets outputs from
+several apps merge into one study-wide derivative tree without collisions. It
+matches the sibling `freesurfer-nidm` and `fsl-nidm` BIDSapps.
+
+`dataset_description.json` sits at the derivative root, deliberately *outside*
+the per-subject directory: under BABS that directory is what gets zipped and
+shipped, so a copy inside it would be duplicated into every subject's zip.
+
+The app copies existing NIDM files before augmentation, so originals are never
+overwritten.
+
+**Running under BABS:** pair this layout with `zip_foldernames: {${subid}: "<version>"}`
+so the zip's top-level folder is `sub-{id}` and results unzip straight into
+`<derivative_name>/sub-{id}/...`.
 
 ### Examples
 

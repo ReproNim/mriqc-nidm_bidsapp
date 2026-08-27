@@ -20,8 +20,9 @@ from .nidm_converter import (
 from .json_to_csv import convert_mriqc_json_to_csv
 from .csv_to_nidm import convert_csv_to_nidm
 from .nidm_utils import (
-    build_nidm_output_path,
+    build_subject_output_path,
     build_nidm_filename,
+    NIDM_FILENAME,
     normalize_subject_label,
     normalize_session_label,
 )
@@ -33,8 +34,9 @@ __all__ = [
     "copy_and_prepare_nidm",
     "convert_mriqc_json_to_csv",
     "convert_csv_to_nidm",
-    "build_nidm_output_path",
+    "build_subject_output_path",
     "build_nidm_filename",
+    "NIDM_FILENAME",
     "normalize_subject_label",
     "normalize_session_label",
 ]

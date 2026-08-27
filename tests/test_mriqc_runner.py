@@ -67,8 +67,11 @@ class TestMRIQCWrapperInit:
         )
 
         assert wrapper.output_dir.exists()
-        assert wrapper.mriqc_dir.exists()
         assert wrapper.work_dir.exists()
+        # mriqc_dir is NOT created eagerly: run.py passes a per-subject
+        # subject_output_dir instead, and creating the fallback would leave a
+        # stray directory at the derivative root on every run.
+        assert not wrapper.mriqc_dir.exists()
 
     def test_init_sets_paths(self, test_dirs, mock_mriqc_version):
         """Test that initialization sets correct paths."""
@@ -79,8 +82,11 @@ class TestMRIQCWrapperInit:
 
         assert wrapper.bids_dir == test_dirs["bids_dir"]
         assert wrapper.output_dir == test_dirs["output_dir"]
-        assert wrapper.mriqc_dir == test_dirs["output_dir"] / "mriqc-nidm_bidsapp" / "mriqc"
-        assert wrapper.work_dir == test_dirs["output_dir"] / "work"
+        # Per-subject layout: no app-name wrapper directory. Both defaults are
+        # dot-prefixed so they can never be mistaken for a sub-* directory or be
+        # swept into a subject's zip.
+        assert wrapper.mriqc_dir == test_dirs["output_dir"] / ".mriqc"
+        assert wrapper.work_dir == test_dirs["output_dir"] / ".mriqc_work"
 
     def test_init_tracks_results(self, test_dirs, mock_mriqc_version):
         """Test that initialization creates results tracking."""
@@ -580,6 +586,7 @@ class TestMRIQCWrapperSummary:
         )
 
         # Create existing file
+        wrapper.mriqc_dir.mkdir(parents=True, exist_ok=True)
         desc_path = wrapper.mriqc_dir / "dataset_description.json"
         desc_path.write_text('{"Name": "Existing"}')
 

@@ -25,12 +25,17 @@ WORKDIR /opt
 
 # Install conda-forge packages with micromamba, then pip packages
 # Combining into single RUN reduces image layers
+# NOTE the two-step pip install. pynidm 4.5.0 *declares* rdflib>=6.3.2,<6.4, but
+# it ships an oxigraph-backed store whose oxrdflib requires rdflib<8 and actually
+# wants rdflib 7. Installing requirements first and then force-upgrading rdflib
+# deliberately overrides pynidm's stale pin -- a single resolved install cannot
+# express this (uv refuses it outright). Same order as freesurfer-nidm_bidsapp.
 RUN micromamba install -n base -y -c conda-forge \
         pandas \
-        rdflib \
         click \
         pybids && \
-    pip install --no-cache-dir pynidm==4.2.3 nidmresults && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir --upgrade 'rdflib>=7.0.0,<8' && \
     pip install --no-deps -e .
 
 # =======================================
