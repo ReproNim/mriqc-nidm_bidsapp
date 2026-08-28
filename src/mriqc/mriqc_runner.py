@@ -428,7 +428,8 @@ class MRIQCWrapper:
         base_dir = search_dir if search_dir else self.mriqc_dir
 
         # Search in MRIQC output directory
-        # Note: In subject-centric mode, search_dir is already subject-specific (e.g., sub-01/mriqc/)
+        # Note: In subject-centric mode, search_dir is already
+        # subject-specific (e.g., sub-01/mriqc/)
         # In legacy mode, we need to append sub-01
         if "sub-" not in str(base_dir):
             subject_dir = base_dir / f"sub-{subject_id}"
@@ -542,7 +543,10 @@ class MRIQCWrapper:
                     "Description": "MRIQC to NIDM BIDS App",
                 },
             ],
-            "HowToAcknowledge": "Please cite MRIQC (https://doi.org/10.1371/journal.pone.0184661)",
+            "HowToAcknowledge": (
+                "Please cite MRIQC "
+                "(https://doi.org/10.1371/journal.pone.0184661)"
+            ),
         }
 
         with open(desc_file, "w") as f:

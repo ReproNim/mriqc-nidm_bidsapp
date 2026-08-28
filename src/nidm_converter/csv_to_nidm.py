@@ -181,7 +181,7 @@ def convert_csv_to_nidm(
 
     # Log success
     if existing_nidm:
-        logger.info(f"Successfully augmented NIDM with MRIQC data")
+        logger.info("Successfully augmented NIDM with MRIQC data")
     else:
         logger.info(f"Successfully created NIDM: {output_ttl}")
 

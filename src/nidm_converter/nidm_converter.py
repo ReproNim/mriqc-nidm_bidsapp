@@ -127,7 +127,7 @@ def detect_existing_nidm(
     elif bids_dir is not None:
         # Convention-based location (backward compatibility)
         search_dir = bids_dir.parent / "NIDM" / f"sub-{subject_id}"
-        logger.debug(f"Using convention-based NIDM location: BIDS/../NIDM/")
+        logger.debug("Using convention-based NIDM location: BIDS/../NIDM/")
     else:
         raise ValueError("Either nidm_input_dir or bids_dir must be provided")
 
