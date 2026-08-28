@@ -48,16 +48,30 @@ class TestSessionLabel:
             assert main() == 1
         wrapper.assert_not_called()
 
-    def test_accepts_a_single_session_label(self, dataset, monkeypatch):
+    @pytest.mark.parametrize("given", ["baseline", "ses-baseline"])
+    def test_single_session_label_is_normalised_and_reaches_the_pipeline(
+        self, dataset, monkeypatch, given
+    ):
+        # Asserting only `main() == 0` would not notice the session being
+        # dropped: with session_id=None every session of a subject writes to
+        # the same sub-<id>/nidm.ttl and silently overwrites the previous one,
+        # while the run still reports success. BABS session-level jobs always
+        # pass --session-label, so the label must survive normalisation and
+        # reach both MRIQC and the NIDM conversion.
         bids_dir, out_dir = dataset
         monkeypatch.setattr(
             sys, "argv",
-            _argv(bids_dir, out_dir, "--session-label", "baseline",
+            _argv(bids_dir, out_dir, "--session-label", given,
                   "--skip-nidm-conversion"),
         )
-        with patch("src.run.MRIQCWrapper"), \
-                patch("src.run.process_subject", return_value=True):
+        with patch("src.run.MRIQCWrapper") as wrapper, \
+                patch("src.run.process_subject", return_value=True) as proc:
             assert main() == 0
+
+        assert proc.call_args.kwargs["session_id"] == "baseline"
+        assert wrapper.return_value.process_participant.call_args.kwargs[
+            "session_id"
+        ] == "baseline"
 
 
 class TestSubjectSelection:
