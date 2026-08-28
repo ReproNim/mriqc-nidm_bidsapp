@@ -54,7 +54,10 @@ class TestBidsDirectoryValidation:
         mock_wrapper.assert_not_called()
 
     def test_accepts_well_formed_bids_dir(self, tmp_path, monkeypatch):
-        # The guard must not reject a valid dataset: MRIQC still gets invoked.
+        # The guard must not reject a valid dataset. Assert the whole contract,
+        # not just that the mock was touched: a run that reaches MRIQC but then
+        # fails downstream still returns 1, so checking only "MRIQCWrapper was
+        # constructed" would stay green over a broken pipeline.
         bids_dir = _write_bids_tree(tmp_path / "bids")
         monkeypatch.setattr(
             sys,
@@ -68,7 +71,44 @@ class TestBidsDirectoryValidation:
             ],
         )
 
-        with patch("src.run.MRIQCWrapper") as mock_wrapper:
-            main()
+        with patch("src.run.MRIQCWrapper") as mock_wrapper, patch(
+            "src.run.process_subject", return_value=True
+        ):
+            exit_code = main()
 
+        assert exit_code == 0
         mock_wrapper.assert_called_once()
+
+
+class TestOutputDirectoryValidation:
+    """An unusable output directory must be reported, not raised."""
+
+    def test_returns_error_when_output_dir_cannot_be_created(
+        self, tmp_path, monkeypatch
+    ):
+        # A read-only parent (a full quota or a wrong mount under BABS) must
+        # produce an exit code, not a PermissionError traceback from mkdir.
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        locked = tmp_path / "locked"
+        locked.mkdir()
+        locked.chmod(0o555)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "run.py",
+                str(bids_dir),
+                str(locked / "out"),
+                "participant",
+                "--skip-nidm-conversion",
+            ],
+        )
+
+        try:
+            with patch("src.run.MRIQCWrapper") as mock_wrapper:
+                exit_code = main()
+        finally:
+            locked.chmod(0o755)
+
+        assert exit_code == 1
+        mock_wrapper.assert_not_called()

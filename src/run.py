@@ -39,7 +39,7 @@ from .nidm_converter import (
     NIDM_FILENAME,
 )
 from .nidm_converter.csv_to_nidm import check_csv2nidm_available
-from .validators import validate_bids_directory
+from .validators import validate_bids_directory, validate_output_directory
 from .nidm_converter.data import get_mriqc_dictionary
 
 
@@ -361,8 +361,14 @@ MRIQC Arguments:
     if not validate_bids_directory(args.bids_dir):
         return 1
 
-    # Create output directory
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+    # Create the output directory through the validator rather than a bare
+    # mkdir: it creates with parents=True exactly as before, but turns a
+    # read-only parent or an exhausted quota into a reported error instead of
+    # an uncaught PermissionError traceback. It also rejects a path that
+    # already exists as a file, and one that exists but is not writable --
+    # neither of which mkdir(exist_ok=True) would catch.
+    if not validate_output_directory(args.output_dir):
+        return 1
 
     # Setup logging
     logger = setup_logging(args.output_dir, args.verbose, __version__)
