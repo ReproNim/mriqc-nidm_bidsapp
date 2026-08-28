@@ -39,6 +39,7 @@ from .nidm_converter import (
     NIDM_FILENAME,
 )
 from .nidm_converter.csv_to_nidm import check_csv2nidm_available
+from .validators import validate_bids_directory
 from .nidm_converter.data import get_mriqc_dictionary
 
 
@@ -350,9 +351,14 @@ MRIQC Arguments:
     # Use parse_known_args to capture MRIQC-specific arguments
     args, mriqc_extra_args = parser.parse_known_args()
 
-    # Validate paths
-    if not args.bids_dir.exists():
-        print(f"Error: BIDS directory not found: {args.bids_dir}", file=sys.stderr)
+    # Validate the input before creating anything or starting MRIQC.
+    #
+    # A bare exists() check is not enough: a directory that exists but has no
+    # dataset_description.json is not a BIDS dataset, and MRIQC started against
+    # it fails deep inside the container where the cause is buried in MRIQC's
+    # traceback. Under BABS that costs a scheduler slot per subject to learn
+    # something we can detect here in microseconds.
+    if not validate_bids_directory(args.bids_dir):
         return 1
 
     # Create output directory
