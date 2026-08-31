@@ -2,7 +2,8 @@
 Utility functions for MRIQC-NIDM BIDSapp.
 
 This module provides general utility functions used across the MRIQC-NIDM application
-including label normalization, argument parsing, logging setup, and BIDS metadata creation.
+including label normalization, argument parsing, logging setup, and BIDS
+metadata creation.
 """
 
 import logging
@@ -215,7 +216,10 @@ def create_dataset_description(
                 "CodeURL": "https://github.com/sensein/mriqc-nidm_bidsapp"
             }
         ],
-        "HowToAcknowledge": "Please cite MRIQC (https://doi.org/10.1371/journal.pone.0184661) and NIDM (http://nidm.nidash.org/)",
+        "HowToAcknowledge": (
+            "Please cite MRIQC (https://doi.org/10.1371/journal.pone.0184661) "
+            "and NIDM (http://nidm.nidash.org/)"
+        ),
     }
 
     desc_file = output_dir / "dataset_description.json"

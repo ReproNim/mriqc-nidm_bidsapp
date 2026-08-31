@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Optional, List
 
 
-def validate_bids_directory(bids_dir: Path, logger: Optional[logging.Logger] = None) -> bool:
+def validate_bids_directory(
+    bids_dir: Path, logger: Optional[logging.Logger] = None
+) -> bool:
     """
     Validate BIDS directory structure.
 

@@ -133,7 +133,9 @@ def build_subject_output_path(
 NIDM_FILENAME = "nidm.ttl"
 
 
-def build_nidm_filename(subject_id: str = None, session_id: Optional[str] = None) -> str:
+def build_nidm_filename(
+    subject_id: str = None, session_id: Optional[str] = None
+) -> str:
     """
     Return the canonical NIDM output filename.
 

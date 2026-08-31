@@ -44,7 +44,9 @@ def test_detect_existing_nidm_preferred_file(logger):
         (nidm_dir / "other.ttl").touch()
         (nidm_dir / "data.jsonld").touch()
 
-        result = detect_existing_nidm(subject_id="01", nidm_input_dir=nidm_input_dir, logger=logger)
+        result = detect_existing_nidm(
+            subject_id="01", nidm_input_dir=nidm_input_dir, logger=logger
+        )
 
         assert result is not None
         assert result == nidm_file
@@ -62,7 +64,9 @@ def test_detect_existing_nidm_any_ttl_file(logger):
         ttl_file = nidm_dir / "data.ttl"
         ttl_file.touch()
 
-        result = detect_existing_nidm(subject_id="02", nidm_input_dir=nidm_input_dir, logger=logger)
+        result = detect_existing_nidm(
+            subject_id="02", nidm_input_dir=nidm_input_dir, logger=logger
+        )
 
         assert result is not None
         assert result == ttl_file
@@ -80,7 +84,9 @@ def test_detect_existing_nidm_jsonld_file(logger):
         jsonld_file = nidm_dir / "data.jsonld"
         jsonld_file.touch()
 
-        result = detect_existing_nidm(subject_id="03", nidm_input_dir=nidm_input_dir, logger=logger)
+        result = detect_existing_nidm(
+            subject_id="03", nidm_input_dir=nidm_input_dir, logger=logger
+        )
 
         assert result is not None
         assert result == jsonld_file
@@ -98,7 +104,9 @@ def test_detect_existing_nidm_json_ld_file(logger):
         json_ld_file = nidm_dir / "data.json-ld"
         json_ld_file.touch()
 
-        result = detect_existing_nidm(subject_id="04", nidm_input_dir=nidm_input_dir, logger=logger)
+        result = detect_existing_nidm(
+            subject_id="04", nidm_input_dir=nidm_input_dir, logger=logger
+        )
 
         assert result is not None
         assert result == json_ld_file
@@ -110,7 +118,9 @@ def test_detect_existing_nidm_no_directory(logger):
     with tempfile.TemporaryDirectory() as tmpdir:
         nidm_input_dir = Path(tmpdir) / "NIDM"
 
-        result = detect_existing_nidm(subject_id="99", nidm_input_dir=nidm_input_dir, logger=logger)
+        result = detect_existing_nidm(
+            subject_id="99", nidm_input_dir=nidm_input_dir, logger=logger
+        )
 
         assert result is None
 
@@ -122,7 +132,9 @@ def test_detect_existing_nidm_empty_directory(logger):
         nidm_dir = nidm_input_dir / "sub-05"
         nidm_dir.mkdir(parents=True)
 
-        result = detect_existing_nidm(subject_id="05", nidm_input_dir=nidm_input_dir, logger=logger)
+        result = detect_existing_nidm(
+            subject_id="05", nidm_input_dir=nidm_input_dir, logger=logger
+        )
 
         assert result is None
 

@@ -13,14 +13,12 @@ Follows BIDS Apps specification and patterns from freesurfer_bidsapp.
 """
 
 import argparse
-import json
 import logging
 import re
 import shutil
 import sys
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
 from . import __version__
 from .mriqc.mriqc_runner import MRIQCWrapper
@@ -110,7 +108,10 @@ def process_subject(
         subject_mriqc_dir = mriqc_dir / f"sub-{subject_id}"
 
         if not subject_mriqc_dir.exists():
-            logger.warning(f"No MRIQC output directory found for sub-{subject_id}: {subject_mriqc_dir}")
+            logger.warning(
+                f"No MRIQC output directory found for sub-{subject_id}: "
+                f"{subject_mriqc_dir}"
+            )
             return False
 
         # Find all MRIQC IQM JSON files recursively
@@ -154,7 +155,8 @@ def process_subject(
                 logger.warning(
                     f"sub-{subject_id} has multiple sessions "
                     f"({', '.join(sorted(found_sessions))}) but no --session-label was "
-                    "given; all sessions will be merged into one subject-level nidm.ttl. "
+                    "given; all sessions will be merged into one "
+                    "subject-level nidm.ttl. "
                     "Pass --session-label to write per-session NIDM instead."
                 )
 
@@ -186,7 +188,10 @@ def process_subject(
             # Rename to canonical name if different
             if copied_nidm != subject_ttl_file:
                 copied_nidm.rename(subject_ttl_file)
-                logger.info(f"Renamed copied NIDM to canonical name: {subject_ttl_file.name}")
+                logger.info(
+                    "Renamed copied NIDM to canonical name: "
+                    f"{subject_ttl_file.name}"
+                )
             augmentation_target = subject_ttl_file
             logger.info(f"Will augment existing NIDM: {subject_ttl_file}")
 
@@ -210,7 +215,11 @@ def process_subject(
             # Step 3c: Convert CSV → NIDM
             # All scans go into the same canonical TTL file
             # First scan creates it, subsequent scans augment it
-            existing_nidm_arg = augmentation_target if augmentation_target and augmentation_target.exists() else None
+            existing_nidm_arg = (
+                augmentation_target
+                if augmentation_target and augmentation_target.exists()
+                else None
+            )
 
             try:
                 success = convert_csv_to_nidm(
@@ -253,7 +262,9 @@ def process_subject(
             )
 
         if any_scan_failed:
-            logger.warning(f"Some scans failed to process for subject: sub-{subject_id}")
+            logger.warning(
+                f"Some scans failed to process for subject: sub-{subject_id}"
+            )
             return False
 
         logger.info(f"Successfully processed subject: sub-{subject_id}")
@@ -310,7 +321,10 @@ MRIQC Arguments:
     parser.add_argument(
         "--session-label",
         nargs="+",
-        help='Session label(s) to process (without "ses-" prefix, e.g., "baseline" "followup")',
+        help=(
+            'Session label(s) to process (without "ses-" prefix, '
+            'e.g., "baseline" "followup")'
+        ),
     )
     parser.add_argument(
         "--nidm-input-dir",
@@ -508,7 +522,9 @@ MRIQC Arguments:
         shutil.rmtree(staging_root, ignore_errors=True)
 
     # Summary
-    logger.info(f"Processing complete: {success_count}/{len(subjects)} subjects successful")
+    logger.info(
+        f"Processing complete: {success_count}/{len(subjects)} subjects successful"
+    )
 
     if success_count == len(subjects):
         logger.info("All subjects processed successfully")

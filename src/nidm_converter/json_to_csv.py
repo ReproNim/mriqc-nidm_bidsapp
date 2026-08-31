@@ -196,7 +196,10 @@ def extract_bids_info(
         ses = "01"
         logger.debug("No session found in path or filename, defaulting to '01'")
 
-    logger.info(f"Extracted BIDS info: subject={subj}, session={ses}, task={task}, run={run}")
+    logger.info(
+        f"Extracted BIDS info: subject={subj}, session={ses}, "
+        f"task={task}, run={run}"
+    )
 
     return subj, ses, task, run
 
@@ -293,7 +296,8 @@ def convert_mriqc_json_to_csv(
     # Add required NIDM fields (ensure subject_id stays as string)
     updated_data.update(
         {
-            "subject_id": str(subj),  # Explicitly convert to string to prevent int conversion
+            # Explicitly convert to string to prevent int conversion
+            "subject_id": str(subj),
             "ses": str(ses),
             "task": str(task),
             "run": str(run),
@@ -360,7 +364,7 @@ if __name__ == "__main__":
         csv_path, metadata_path = convert_mriqc_json_to_csv(
             args.json_file, args.csv_file, logger
         )
-        print(f"\nSuccess!")
+        print("\nSuccess!")
         print(f"  CSV: {csv_path}")
         print(f"  Metadata: {metadata_path}")
     except Exception as e:

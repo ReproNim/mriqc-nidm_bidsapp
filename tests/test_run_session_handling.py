@@ -12,7 +12,7 @@ Critical for P1 bug fix: ensuring multi-session datasets are processed correctly
 import json
 import logging
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -76,7 +76,9 @@ class TestSessionHandling:
         subject_id = "01"
 
         # Create MRIQC output: sub-01/anat/sub-01_T1w.json
-        json_file = mriqc_dir / f"sub-{subject_id}" / "anat" / f"sub-{subject_id}_T1w.json"
+        json_file = (
+            mriqc_dir / f"sub-{subject_id}" / "anat" / f"sub-{subject_id}_T1w.json"
+        )
         create_mriqc_json(json_file, subject_id)
 
         # Mock conversion functions to test only JSON discovery
@@ -114,8 +116,15 @@ class TestSessionHandling:
         subject_id = "01"
 
         # Create MRIQC outputs in different datatypes
-        anat_file = mriqc_dir / f"sub-{subject_id}" / "anat" / f"sub-{subject_id}_T1w.json"
-        func_file = mriqc_dir / f"sub-{subject_id}" / "func" / f"sub-{subject_id}_task-rest_bold.json"
+        anat_file = (
+            mriqc_dir / f"sub-{subject_id}" / "anat" / f"sub-{subject_id}_T1w.json"
+        )
+        func_file = (
+            mriqc_dir
+            / f"sub-{subject_id}"
+            / "func"
+            / f"sub-{subject_id}_task-rest_bold.json"
+        )
         create_mriqc_json(anat_file, subject_id)
         create_mriqc_json(func_file, subject_id)
 

@@ -5,7 +5,6 @@ Unit tests for the run module.
 These tests verify the CLI argument parsing and passthrough functionality.
 """
 
-import pytest
 
 from src.utils import parse_mriqc_args
 

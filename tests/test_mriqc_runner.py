@@ -12,7 +12,6 @@ These tests verify the MRIQC runner functionality including:
 
 import json
 import pytest
-from pathlib import Path
 from unittest.mock import Mock, patch
 
 from src.mriqc.mriqc_runner import MRIQCWrapper
@@ -112,7 +111,9 @@ class TestMRIQCWrapperInit:
 
     def test_init_handles_missing_mriqc(self, test_dirs):
         """Test that initialization raises error if MRIQC not found."""
-        with patch("src.mriqc.mriqc_runner.subprocess.run", side_effect=FileNotFoundError):
+        with patch(
+            "src.mriqc.mriqc_runner.subprocess.run", side_effect=FileNotFoundError
+        ):
             with pytest.raises(RuntimeError, match="MRIQC is not installed"):
                 MRIQCWrapper(
                     bids_dir=test_dirs["bids_dir"],
@@ -144,7 +145,9 @@ class TestMRIQCWrapperCommands:
             output_dir=test_dirs["output_dir"],
         )
 
-        cmd = wrapper._create_mriqc_command(output_dir=wrapper.mriqc_dir, subject_id="01")
+        cmd = wrapper._create_mriqc_command(
+            output_dir=wrapper.mriqc_dir, subject_id="01"
+        )
 
         assert "--participant-label" in cmd
         assert "01" in cmd
@@ -156,7 +159,9 @@ class TestMRIQCWrapperCommands:
             output_dir=test_dirs["output_dir"],
         )
 
-        cmd = wrapper._create_mriqc_command(output_dir=wrapper.mriqc_dir, subject_id="01", session_id="01")
+        cmd = wrapper._create_mriqc_command(
+            output_dir=wrapper.mriqc_dir, subject_id="01", session_id="01"
+        )
 
         assert "--session-id" in cmd
         assert "01" in cmd
@@ -168,20 +173,26 @@ class TestMRIQCWrapperCommands:
             output_dir=test_dirs["output_dir"],
         )
 
-        cmd = wrapper._create_mriqc_command(output_dir=wrapper.mriqc_dir, modalities=["T1w", "bold"])
+        cmd = wrapper._create_mriqc_command(
+            output_dir=wrapper.mriqc_dir, modalities=["T1w", "bold"]
+        )
 
         assert cmd.count("-m") == 2
         assert "T1w" in cmd
         assert "bold" in cmd
 
-    def test_create_command_with_performance_params(self, test_dirs, mock_mriqc_version):
+    def test_create_command_with_performance_params(
+        self, test_dirs, mock_mriqc_version
+    ):
         """Test MRIQC command with performance parameters."""
         wrapper = MRIQCWrapper(
             bids_dir=test_dirs["bids_dir"],
             output_dir=test_dirs["output_dir"],
         )
 
-        cmd = wrapper._create_mriqc_command(output_dir=wrapper.mriqc_dir, nprocs=4, mem_gb=16)
+        cmd = wrapper._create_mriqc_command(
+            output_dir=wrapper.mriqc_dir, nprocs=4, mem_gb=16
+        )
 
         assert "--nprocs" in cmd
         assert "4" in cmd
@@ -206,7 +217,9 @@ class TestMRIQCWrapperCommands:
             output_dir=test_dirs["output_dir"],
         )
 
-        cmd = wrapper._create_mriqc_command(output_dir=wrapper.mriqc_dir, verbose_count=2)
+        cmd = wrapper._create_mriqc_command(
+            output_dir=wrapper.mriqc_dir, verbose_count=2
+        )
 
         assert cmd.count("-v") == 2
 
@@ -217,12 +230,16 @@ class TestMRIQCWrapperCommands:
             output_dir=test_dirs["output_dir"],
         )
 
-        cmd = wrapper._create_mriqc_command(output_dir=wrapper.mriqc_dir, fd_radius=45.0)
+        cmd = wrapper._create_mriqc_command(
+            output_dir=wrapper.mriqc_dir, fd_radius=45.0
+        )
 
         assert "--fd_radius" in cmd
         assert "45.0" in cmd
 
-    def test_create_command_with_passthrough_kwargs(self, test_dirs, mock_mriqc_version):
+    def test_create_command_with_passthrough_kwargs(
+        self, test_dirs, mock_mriqc_version
+    ):
         """Test MRIQC command with passthrough arguments via kwargs."""
         wrapper = MRIQCWrapper(
             bids_dir=test_dirs["bids_dir"],
@@ -238,8 +255,6 @@ class TestMRIQCWrapperCommands:
             ica=True,  # Boolean flag
         )
 
-        cmd_str = " ".join(cmd)
-
         # Check mem is passed through
         assert "--mem" in cmd
         assert "16G" in cmd
@@ -251,7 +266,9 @@ class TestMRIQCWrapperCommands:
         # Check boolean flag
         assert "--ica" in cmd
 
-    def test_create_command_mem_via_kwargs_not_duplicate(self, test_dirs, mock_mriqc_version):
+    def test_create_command_mem_via_kwargs_not_duplicate(
+        self, test_dirs, mock_mriqc_version
+    ):
         """Test that mem via kwargs doesn't duplicate if mem_gb is also set."""
         wrapper = MRIQCWrapper(
             bids_dir=test_dirs["bids_dir"],
@@ -411,7 +428,9 @@ class TestMRIQCWrapperProcessing:
                 summary = wrapper.process_all_participants(skip_existing=False)
 
                 assert summary["success"] == 2
-                mock_layout.assert_called_once_with(test_dirs["bids_dir"], validate=False)
+                mock_layout.assert_called_once_with(
+                    test_dirs["bids_dir"], validate=False
+                )
 
 
 class TestMRIQCWrapperOutputs:
@@ -493,7 +512,9 @@ class TestMRIQCWrapperOutputs:
         t1_file = wrapper.mriqc_dir / "sub-01" / "anat" / "sub-01_T1w.json"
         t2_file = wrapper.mriqc_dir / "sub-01" / "anat" / "sub-01_T2w.json"
         # This should NOT match when filtering for T1w (false positive test)
-        false_positive = wrapper.mriqc_dir / "sub-01" / "func" / "sub-01_acq-T1w_bold.json"
+        false_positive = (
+            wrapper.mriqc_dir / "sub-01" / "func" / "sub-01_acq-T1w_bold.json"
+        )
 
         t1_file.parent.mkdir(parents=True, exist_ok=True)
         t2_file.parent.mkdir(parents=True, exist_ok=True)
@@ -504,7 +525,8 @@ class TestMRIQCWrapperOutputs:
 
         outputs = wrapper.find_mriqc_outputs(subject_id="01", modality="T1w")
 
-        # Should only match the actual T1w file, not the bold file with T1w in acquisition
+        # Should only match the actual T1w file, not the bold file with T1w
+        # in acquisition
         assert len(outputs) == 1
         assert outputs[0] == t1_file
 

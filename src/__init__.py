@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 
+
 def get_version():
     """Read version from VERSION file"""
     # If installed as a package, VERSION should be in the root of the package
@@ -11,13 +12,14 @@ def get_version():
         # Fallback for installed package where VERSION might be elsewhere
         # or if we are in a different structure
         return "0.1.0"
-    
+
     try:
         with open(version_file) as f:
             data = json.load(f)
             return data["mriqc-nidm"]["version"]
     except (FileNotFoundError, KeyError, json.JSONDecodeError):
         return "0.1.0"
+
 
 __version__ = get_version()
 __author__ = "ReproNim"

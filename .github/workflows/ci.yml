@@ -3,8 +3,11 @@ name: MRIQC-NIDM BIDS App CI
 on:
   push:
     branches: [ main ]
+  # No base-branch filter: a `branches: [main]` filter here matches the PR's
+  # BASE ref, so a PR stacked on another PR's branch runs no CI at all. That is
+  # the wrong default for a repo whose PRs are routinely stacked -- the change
+  # least likely to have been validated is the one that gets skipped.
   pull_request:
-    branches: [ main ]
 
 jobs:
   test:
