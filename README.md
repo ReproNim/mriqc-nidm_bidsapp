@@ -199,5 +199,5 @@ MIT License - See [LICENSE](LICENSE) file for details.
 
 ## Links
 
-- Repository: https://github.com/sensein/mriqc-nidm_bidsapp
-- Issues: https://github.com/sensein/mriqc-nidm_bidsapp/issues
+- Repository: https://github.com/ReproNim/mriqc-nidm_bidsapp
+- Issues: https://github.com/ReproNim/mriqc-nidm_bidsapp/issues
