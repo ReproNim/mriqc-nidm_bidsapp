@@ -8,7 +8,8 @@ Adapted from /home/yibei/stuff2NIDM/Scripts/mriqc_json2csv.py
 Key features:
 - Extracts MRIQC quality metrics from JSON
 - Removes unwanted metadata fields
-- Extracts BIDS information (subject, session, task, run)
+- Extracts BIDS information (subject, session, task, run, and the acq/rec/ce
+  entities that tell apart several images of one run)
 - Auto-generates software metadata CSV from MRIQC provenance
 - Adds required fields for NIDM conversion
 
@@ -204,6 +205,37 @@ def extract_bids_info(
     return subj, ses, task, run
 
 
+# BIDS entities that can separate two images sharing subject, session, task
+# and run (e.g. sub-X_ses-N_run-1_T1w and sub-X_ses-N_acq-hires_run-1_T1w).
+# csv2nidm has no notion of them, so they travel as ordinary annotated
+# columns; each one needs a row in mriqc_dictionary_v1.csv or csv2nidm stops
+# to ask for an annotation on stdin.
+IMAGE_ENTITIES = ("acq", "ce", "rec")
+
+
+def extract_image_entities(json_file_path: Path) -> Dict[str, str]:
+    """
+    Extract the acq, ce and rec entities from an MRIQC IQM filename.
+
+    Args:
+        json_file_path: Path to the MRIQC JSON file
+
+    Returns:
+        Dict mapping each entity in IMAGE_ENTITIES to its label, or "" when
+        the filename does not carry it
+
+    Examples:
+        >>> extract_image_entities(Path('sub-01_ses-1_acq-hires_run-1_T1w.json'))
+        {'acq': 'hires', 'ce': '', 'rec': ''}
+    """
+    filename = json_file_path.name
+    entities = {}
+    for entity in IMAGE_ENTITIES:
+        match = re.search(rf"(?:^|_){entity}-([^_]+)", filename)
+        entities[entity] = match.group(1) if match else ""
+    return entities
+
+
 def convert_mriqc_json_to_csv(
     json_file: Path,
     output_csv: Path,
@@ -220,7 +252,8 @@ def convert_mriqc_json_to_csv(
     2. Extract software metadata from provenance
     3. Remove unwanted fields (bids_meta, provenance, qi_*, size_*, spacing_*)
     4. Extract BIDS information from file path and metadata
-    5. Add required NIDM fields (subject_id, ses, task, run, source_url)
+    5. Add required NIDM fields (subject_id, ses, task, run, source_url) and
+       the acq/ce/rec entities, so images of one run stay distinct records
     6. Write to CSV file
 
     Args:
@@ -302,6 +335,7 @@ def convert_mriqc_json_to_csv(
             "task": str(task),
             "run": str(run),
             "source_url": source_url,
+            **extract_image_entities(json_file),
         }
     )
 
@@ -309,7 +343,7 @@ def convert_mriqc_json_to_csv(
     df = pd.DataFrame(updated_data, index=[0])
 
     # Ensure BIDS identifier columns are preserved as strings (not converted to int)
-    string_columns = ["subject_id", "ses", "task", "run"]
+    string_columns = ["subject_id", "ses", "task", "run", *IMAGE_ENTITIES]
     for col in string_columns:
         if col in df.columns:
             df[col] = df[col].astype(str)
