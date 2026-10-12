@@ -99,7 +99,8 @@ def process_subject(
             subject_id=subject_id,
             nidm_input_dir=nidm_input_dir,
             bids_dir=bids_dir if not nidm_input_dir else None,
-            logger=logger
+            logger=logger,
+            session_id=session_id,
         )
 
         # Step 2: Find MRIQC outputs
