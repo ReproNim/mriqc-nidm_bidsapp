@@ -69,8 +69,8 @@ From: nipreps/mriqc:25.0.0rc0
 
     Version Information:
     - MRIQC-NIDM: 0.1.0
-    - MRIQC: latest (from nipreps/mriqc:latest)
-    - Base Image: nipreps/mriqc:latest
+    - MRIQC: 25.0.0rc0
+    - Base Image: nipreps/mriqc:25.0.0rc0
 
     Usage:
       singularity run -B [workdir] [container] [bids_dir] [output_dir] participant [options]
