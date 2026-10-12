@@ -357,6 +357,39 @@ def convert_mriqc_json_to_csv(
     return output_csv, software_csv_path
 
 
+def combine_iqm_csvs(
+    csv_paths: List[Path],
+    output_csv: Path,
+    logger: Optional[logging.Logger] = None,
+) -> Path:
+    """
+    Stack one-row IQM CSVs into a single CSV for one csv2nidm call.
+
+    Anatomical and functional IQMs have different columns; a cell for a
+    metric an image does not have is left empty, which csv2nidm skips.
+    Values are carried over as text, so identifiers such as "01" or the
+    "None" task of anatomical images are not reinterpreted.
+
+    Args:
+        csv_paths: CSVs written by convert_mriqc_json_to_csv
+        output_csv: Path for the combined CSV
+        logger: Optional logger instance
+
+    Returns:
+        Path to the combined CSV
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    frames = [
+        pd.read_csv(path, dtype=str, keep_default_na=False) for path in csv_paths
+    ]
+    combined = pd.concat(frames, ignore_index=True, sort=False)
+    combined.to_csv(output_csv, index=False)
+    logger.info(f"Combined {len(frames)} IQM row(s) into {output_csv}")
+    return output_csv
+
+
 # Command-line interface (for standalone usage)
 if __name__ == "__main__":
     import argparse

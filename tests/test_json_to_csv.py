@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 
 from src.nidm_converter.json_to_csv import (
+    combine_iqm_csvs,
     convert_mriqc_json_to_csv,
     create_software_metadata_csv,
     extract_bids_info,
@@ -428,3 +429,20 @@ def test_acq_label_reaches_nidm(sample_mriqc_json, logger):
         text = ttl.read_text()
     assert 'nidm:sourceVariable "acq"' in text
     assert '"hires"' in text
+
+
+def test_combine_iqm_csvs_stacks_rows_as_text(tmp_path, logger):
+    """Anat and func rows share one CSV; identifiers stay as written"""
+    anat = tmp_path / "anat.csv"
+    anat.write_text("cjv,subject_id,ses,task,run,acq\n0.5,01,1,None,1,hires\n")
+    func = tmp_path / "func.csv"
+    func.write_text("fd_mean,subject_id,ses,task,run,acq\n0.1,01,1,rest,1,\n")
+
+    out = combine_iqm_csvs([anat, func], tmp_path / "all.csv", logger)
+
+    df = pd.read_csv(out, dtype=str, keep_default_na=False)
+    assert len(df) == 2
+    assert list(df["subject_id"]) == ["01", "01"]
+    assert list(df["task"]) == ["None", "rest"]
+    assert list(df["cjv"]) == ["0.5", ""]
+    assert list(df["fd_mean"]) == ["", "0.1"]
