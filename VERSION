@@ -4,9 +4,8 @@
         "source": "setup.py"
     },
     "mriqc": {
-        "version": "latest",
+        "version": "25.0.0rc0",
         "source": "base_image",
-        "image": "nipreps/mriqc:latest",
-        "note": "Using 'latest' for flexibility. To pin version, rebuild container with: docker build --build-arg MRIQC_VERSION=0.16.1"
+        "image": "nipreps/mriqc:25.0.0rc0"
     }
 }
