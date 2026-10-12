@@ -53,7 +53,7 @@ The package name (`mriqc-nidm`) is shorter for usability, while output directory
 
 1. Build the container:
 ```bash
-apptainer build --fakeroot mriqc-nidm_bidsapp.sif Singularity
+apptainer build --fakeroot --build-arg GIT_COMMIT=$(git rev-parse HEAD) mriqc-nidm_bidsapp.sif Singularity
 ```
 
 > **Building on a cluster:** if your site's apptainer module exports
@@ -62,7 +62,7 @@ apptainer build --fakeroot mriqc-nidm_bidsapp.sif Singularity
 > with `destination /nfs doesn't exist in container`. It is only needed at run
 > time:
 > ```bash
-> env -u APPTAINER_BINDPATH apptainer build --fakeroot mriqc-nidm_bidsapp.sif Singularity
+> env -u APPTAINER_BINDPATH apptainer build --fakeroot --build-arg GIT_COMMIT=$(git rev-parse HEAD) mriqc-nidm_bidsapp.sif Singularity
 > ```
 
 2. Run the container — the first positional argument is the **BIDS** directory:
@@ -75,7 +75,7 @@ apptainer run -B $PWD mriqc-nidm_bidsapp.sif \
 
 1. Build the container:
 ```bash
-docker build -t mriqc-nidm_bidsapp .
+docker build --build-arg GIT_COMMIT=$(git rev-parse HEAD) -t mriqc-nidm_bidsapp .
 ```
 
 2. Run the container:
