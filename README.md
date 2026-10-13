@@ -138,6 +138,15 @@ shipped, so a copy inside it would be duplicated into every subject's zip.
 The app copies existing NIDM files before augmentation, so originals are never
 overwritten.
 
+MRIQC rates every image, and each image's IQMs become their own record in
+`nidm.ttl`. Besides subject, session, task and run, a record carries the
+image's BIDS `acq`, `ce` and `rec` labels when its filename has them, so two
+images of one run (e.g. `sub-X_ses-1_run-1_T1w` and
+`sub-X_ses-1_acq-hires_run-1_T1w`) can be told apart. The labels are annotated
+in `mriqc_dictionary_v1.csv`; csv2nidm needs a dictionary row for every IQM
+CSV column it annotates, and stops to prompt on stdin for any column without
+one.
+
 **Running under BABS:** pair this layout with `zip_foldernames: {${subid}: "<version>"}`
 so the zip's top-level folder is `sub-{id}` and results unzip straight into
 `<derivative_name>/sub-{id}/...`.

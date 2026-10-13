@@ -6,6 +6,7 @@ Tests the MRIQC JSON to CSV conversion functionality.
 
 import json
 import logging
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -16,8 +17,11 @@ from src.nidm_converter.json_to_csv import (
     convert_mriqc_json_to_csv,
     create_software_metadata_csv,
     extract_bids_info,
+    extract_image_entities,
     remove_keys,
 )
+from src.nidm_converter.csv_to_nidm import convert_csv_to_nidm
+from src.nidm_converter.data import get_mriqc_dictionary
 
 
 # Fixtures
@@ -326,3 +330,101 @@ def test_convert_preserves_all_metrics(sample_mriqc_json, logger):
         for metric in expected_metrics:
             assert metric in df.columns
             assert df[metric][0] == sample_mriqc_json[metric]
+
+
+# Image entities that tell apart several images of one subject/session/run.
+# ABIDE II UCLA_Long, for example, has both sub-X_ses-N_run-1_T1w and
+# sub-X_ses-N_acq-hires_run-1_T1w in each session; MRIQC rates both.
+def test_extract_image_entities_reads_acq_rec_ce():
+    """acq, rec and ce are read from the IQM filename"""
+    entities = extract_image_entities(
+        Path("sub-01_ses-1_acq-hires_ce-gad_rec-norm_run-1_T1w.json")
+    )
+    assert entities == {"acq": "hires", "ce": "gad", "rec": "norm"}
+
+
+def test_extract_image_entities_absent_are_empty():
+    """Entities missing from the filename are empty, like run"""
+    entities = extract_image_entities(Path("sub-01_ses-1_run-1_T1w.json"))
+    assert entities == {"acq": "", "ce": "", "rec": ""}
+
+
+def test_extract_image_entities_ignores_lookalike_substrings():
+    """Only a whole "_acq-" entity counts, not "acq-" inside another value"""
+    entities = extract_image_entities(Path("sub-01_task-xacq-1_bold.json"))
+    assert entities["acq"] == ""
+
+
+def _write_iqm_pair(tmpdir, sample):
+    """Two IQM JSONs for the same sub/ses/run, one with acq-hires."""
+    paths = []
+    for name, cjv in [
+        ("sub-01_ses-1_run-1_T1w", 0.111),
+        ("sub-01_ses-1_acq-hires_run-1_T1w", 0.999),
+    ]:
+        data = dict(sample, cjv=cjv)
+        path = Path(tmpdir) / f"{name}.json"
+        path.write_text(json.dumps(data))
+        paths.append(path)
+    return paths
+
+
+def test_acq_variants_of_one_run_stay_distinct_records(sample_mriqc_json, logger):
+    """Two images differing only in acq give two distinguishable rows"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        rows = []
+        for json_file in _write_iqm_pair(tmpdir, sample_mriqc_json):
+            csv_path, _ = convert_mriqc_json_to_csv(
+                json_file, json_file.with_suffix(".csv"), logger
+            )
+            rows.append(pd.read_csv(csv_path, dtype=str, keep_default_na=False))
+        df = pd.concat(rows, ignore_index=True)
+
+        key = ["subject_id", "ses", "task", "run", "acq", "rec", "ce"]
+        assert not df.duplicated(subset=key).any()
+        assert list(df["acq"]) == ["", "hires"]
+        assert list(df["cjv"]) == ["0.111", "0.999"]
+
+
+def test_every_annotated_column_is_in_data_dictionary(sample_mriqc_json, logger):
+    """csv2nidm prompts on stdin for any column missing from the dictionary.
+
+    Under a container or BABS job there is no stdin, so an unmapped column
+    makes csv2nidm exit with EOFError and the image's IQMs are lost.
+    """
+    # Columns csv2nidm handles itself: the subject id is mapped automatically
+    # and -derivative consumes ses/task/run/source_url.
+    handled_by_csv2nidm = {"subject_id", "ses", "task", "run", "source_url"}
+    dictionary = pd.read_csv(get_mriqc_dictionary())
+    with tempfile.TemporaryDirectory() as tmpdir:
+        json_file = Path(tmpdir) / "sub-01_ses-1_acq-hires_run-1_T1w.json"
+        json_file.write_text(json.dumps(sample_mriqc_json))
+        csv_path, _ = convert_mriqc_json_to_csv(
+            json_file, Path(tmpdir) / "out.csv", logger
+        )
+        columns = set(pd.read_csv(csv_path).columns) - handled_by_csv2nidm
+    assert columns <= set(dictionary["source_variable"])
+
+
+@pytest.mark.skipif(
+    shutil.which("csv2nidm") is None, reason="csv2nidm (PyNIDM) not installed"
+)
+def test_acq_label_reaches_nidm(sample_mriqc_json, logger):
+    """The acquisition label is recorded on the image's NIDM derivative"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        json_file = Path(tmpdir) / "sub-01_ses-1_acq-hires_run-1_T1w.json"
+        json_file.write_text(json.dumps(sample_mriqc_json))
+        csv_path, software_csv = convert_mriqc_json_to_csv(
+            json_file, Path(tmpdir) / "out.csv", logger
+        )
+        ttl = Path(tmpdir) / "nidm.ttl"
+        assert convert_csv_to_nidm(
+            csv_file=csv_path,
+            dictionary_csv=get_mriqc_dictionary(),
+            software_metadata_csv=software_csv,
+            output_ttl=ttl,
+            logger=logger,
+        )
+        text = ttl.read_text()
+    assert 'nidm:sourceVariable "acq"' in text
+    assert '"hires"' in text

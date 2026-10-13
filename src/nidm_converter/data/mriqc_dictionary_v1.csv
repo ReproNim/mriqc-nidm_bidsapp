@@ -90,3 +90,6 @@ rot_z,rot_z,Estimated rotation motion parameter around the Z axis (yaw) in radia
 trans_x,trans_x,Estimated translation motion parameter along the X axis in mm.,http://uri.interlex.org/ilx_0794754,,,http://uri.interlex.org/base/ilx_0112568,,
 trans_y,trans_y,Estimated translation motion parameter along the Y axis in mm.,http://uri.interlex.org/ilx_0794754,,,http://uri.interlex.org/base/ilx_0112568,,
 trans_z,trans_z,Estimated translation motion parameter along the Z axis in mm.,http://uri.interlex.org/ilx_0794754,,,http://uri.interlex.org/base/ilx_0112568,,
+acq,acq,"BIDS acquisition label (acq entity) of the rated image, e.g. hires. Tells apart images of the same subject, session and run. Empty when the image has none.",http://www.w3.org/2001/XMLSchema#string,,,,,
+ce,ce,"BIDS contrast-enhancing agent label (ce entity) of the rated image. Empty when the image has none.",http://www.w3.org/2001/XMLSchema#string,,,,,
+rec,rec,"BIDS reconstruction label (rec entity) of the rated image. Empty when the image has none.",http://www.w3.org/2001/XMLSchema#string,,,,,
