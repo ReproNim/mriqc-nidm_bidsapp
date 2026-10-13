@@ -83,6 +83,7 @@ def merge_iqms_into_nidm(
     iqm_ttl: Path,
     output_ttl: Path,
     logger: Optional[logging.Logger] = None,
+    source: Optional[Path] = None,
 ) -> int:
     """
     Attach the IQM records in iqm_ttl to the NIDM graph in input_ttl.
@@ -100,6 +101,8 @@ def merge_iqms_into_nidm(
         iqm_ttl: Graph written by `csv2nidm -derivative` without -nidm
         output_ttl: Where to write the merged graph (may equal input_ttl)
         logger: Optional logger instance
+        source: The input NIDM as found in the NIDM input directory, named in
+            errors when input_ttl is a working copy of it (default input_ttl)
 
     Returns:
         Number of IQM records linked
@@ -111,8 +114,10 @@ def merge_iqms_into_nidm(
     if logger is None:
         logger = logging.getLogger(__name__)
 
+    source = source or input_ttl
     base = Graph()
-    # The input may be any format detect_existing_nidm accepts (.ttl, .jsonld)
+    # Parsed by extension. The app always passes its nidm.ttl copy and refuses
+    # a non-Turtle input before getting here, so in the app this is Turtle.
     base.parse(input_ttl, format=guess_format(str(input_ttl)) or "turtle")
     iqm = Graph()
     iqm.parse(iqm_ttl, format="turtle")
@@ -134,8 +139,7 @@ def merge_iqms_into_nidm(
         matches = acquisitions.get(stem, [])
         if len(matches) != 1:
             problems.append(
-                f"{stem}: {len(matches)} acquisitions in {input_ttl.name} "
-                f"have this image name"
+                f"{stem}: {len(matches)} acquisitions have this image name"
             )
             continue
         acq_activity = base.value(matches[0], PROV.wasGeneratedBy)
@@ -144,7 +148,7 @@ def merge_iqms_into_nidm(
         participant = _participant(base, acq_activity)
         if acq_activity is None or project is None or participant is None:
             problems.append(
-                f"{stem}: acquisition in {input_ttl.name} lacks its activity, "
+                f"{stem}: the acquisition lacks its activity, "
                 f"session/project or participant"
             )
             continue
@@ -163,8 +167,11 @@ def merge_iqms_into_nidm(
 
     if problems:
         raise IQMLinkError(
-            "Cannot link MRIQC IQM records to the input NIDM: "
+            f"Cannot link MRIQC IQM records to the input NIDM {source}: "
             + "; ".join(problems)
+            + ". The input NIDM must describe the images MRIQC rated: it has "
+            "to come from this BIDS dataset. Regenerate it from this dataset "
+            "with bidsmri2nidm."
         )
 
     # Anything else that pointed at csv2nidm's own project (its export

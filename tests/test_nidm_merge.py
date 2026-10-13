@@ -11,6 +11,7 @@ one to its image by filename.
 import json
 import logging
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -23,13 +24,15 @@ from src.nidm_converter.nidm_merge import (
     check_iqm_records,
     merge_iqms_into_nidm,
 )
-from src.run import process_subject
+from src.run import main, process_subject
 from tests.nidm_fixtures import UCLA_IMAGES, input_nidm_ttl, iqm_nidm_ttl
 
 PROV = rdflib.Namespace("http://www.w3.org/ns/prov#")
 NIDM = rdflib.Namespace("http://purl.org/nidash/nidm#")
 DCT = rdflib.Namespace("http://purl.org/dc/terms/")
 NIIRI = rdflib.Namespace("http://iri.nidash.org/")
+NDAR = rdflib.Namespace("https://ndar.nih.gov/api/datadictionary/v2/dataelement/")
+SIO = rdflib.Namespace("http://semanticscience.org/ontology/sio.owl#")
 NFO_FILENAME = rdflib.URIRef(
     "http://www.semanticdesktop.org/ontologies/2007/03/22/nfo#filename"
 )
@@ -129,7 +132,11 @@ class TestMergeIqmsIntoNidm:
         assert float(g.value(ent, cjv)) == pytest.approx(0.1)
 
     def test_jsonld_input(self, tmp_path, logger):
-        """A JSON-LD input NIDM is read as JSON-LD"""
+        """The merge parses its input by extension, so a .jsonld path works.
+
+        This covers the function only; the app refuses a non-Turtle input
+        NIDM before merging (test_jsonld_input_nidm_fails_without_writing_nidm).
+        """
         g = rdflib.Graph()
         g.parse(data=input_nidm_ttl(), format="turtle")
         base = tmp_path / "in.jsonld"
@@ -152,6 +159,20 @@ class TestMergeIqmsIntoNidm:
         with pytest.raises(IQMLinkError, match="sub-51209_ses-1_run-2_T1w"):
             merge_iqms_into_nidm(base, iqm, tmp_path / "out.ttl", logger)
         assert not (tmp_path / "out.ttl").exists()
+
+    def test_link_error_names_the_input_and_the_remedy(self, tmp_path, logger):
+        """The error points at the input NIDM as found, not the working copy"""
+        jsons = ["/work/sub-51209_ses-1_run-2_T1w.json"]
+        copy = _write(tmp_path / "out" / "nidm.ttl", input_nidm_ttl())
+        found = tmp_path / "NIDM" / "sub-51209" / "ses-1" / "nidm.ttl"
+        iqm = _write(tmp_path / "iqm.ttl", iqm_nidm_ttl(jsons))
+
+        with pytest.raises(IQMLinkError) as err:
+            merge_iqms_into_nidm(copy, iqm, copy, logger, source=found)
+        message = str(err.value)
+        assert str(found) in message
+        assert "bidsmri2nidm" in message
+        assert message.isascii()
 
     def test_ambiguous_image_fails(self, tmp_path, logger):
         """Two acquisitions with the same image name cannot be told apart"""
@@ -253,6 +274,31 @@ def test_no_input_nidm_keeps_every_iqm_record(tmp_path, logger):
     assert sorted(_linked_images(ttl)) == sorted(f"{s}.json" for s in stems)
 
 
+def _subject_nodes(ttl: Path):
+    """Nodes that say they are a subject or a project, by any typing.
+
+    csv2nidm mints a Person per CSV row (carrying ndar:src_subject_id) and a
+    Project, which the merge removes by their rdf:type. Counting the
+    properties as well as the types means a renamed type in a later PyNIDM,
+    which the merge would miss, still shows up here as a second subject.
+    """
+    g = rdflib.Graph()
+    g.parse(ttl, format="turtle")
+
+    def typed(cls):
+        return {n for p in (RDF.type, RDFS_TYPE) for n in g.subjects(p, cls)}
+
+    return {
+        "persons": typed(PROV.Person),
+        "subject_ids": set(g.subjects(NDAR.src_subject_id, None)),
+        "subject_agents": {
+            g.value(assoc, PROV.agent)
+            for assoc in g.subjects(PROV.hadRole, SIO.Subject)
+        },
+        "projects": typed(NIDM.Project),
+    }
+
+
 @needs_csv2nidm
 def test_input_nidm_links_t1w_to_its_own_acquisition(tmp_path, logger):
     """UCLA_Long layout: per-session input, T1w never linked to BOLD"""
@@ -266,17 +312,27 @@ def test_input_nidm_links_t1w_to_its_own_acquisition(tmp_path, logger):
             {f"{s}.json" for s in SES1_STEMS}} == {
         f"{s}.json": [f"{s}.nii.gz"] for s in SES1_STEMS
     }
+    # One subject and one project: the input's, not csv2nidm's per-row copies.
+    assert _subject_nodes(ttl) == {
+        "persons": {NIIRI.person},
+        "subject_ids": {NIIRI.person},
+        "subject_agents": {NIIRI.person},
+        "projects": {NIIRI.project},
+    }
 
 
 @needs_csv2nidm
-def test_input_nidm_without_the_image_fails_the_subject(tmp_path, logger):
+def test_input_nidm_without_the_image_fails_the_subject(tmp_path, logger, caplog):
     """An IQM set that cannot be linked fails the job instead of vanishing"""
     nidm_dir = tmp_path / "nidm"
-    _write(nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl", input_nidm_ttl())
+    found = _write(nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl", input_nidm_ttl())
     stems = SES1_STEMS + ["sub-51209_ses-1_run-2_T1w"]
-    ok, _ = _run(tmp_path, stems, nidm_dir, logger)
+    with caplog.at_level(logging.ERROR):
+        ok, _ = _run(tmp_path, stems, nidm_dir, logger)
 
     assert ok is False
+    # The input that has to be fixed, not the copy in the output directory.
+    assert str(found) in caplog.text
 
 
 def test_dropped_iqm_record_fails_the_subject(tmp_path, logger):
@@ -301,3 +357,92 @@ def test_dropped_iqm_record_fails_the_subject(tmp_path, logger):
             skip_nidm=False, logger=logger,
         )
     assert ok is False
+
+
+# Session runs carry only their own session's IQMs.
+def _bids_dir(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "dataset_description.json").write_text(
+        '{"Name": "test", "BIDSVersion": "1.8.0"}'
+    )
+    for ses in ("1", "2"):
+        (root / "sub-51209" / f"ses-{ses}" / "anat").mkdir(parents=True, exist_ok=True)
+    return root
+
+
+@needs_csv2nidm
+def test_session_run_takes_only_its_session_from_a_shared_mriqc_tree(
+    tmp_path, monkeypatch
+):
+    """--mriqc-output-dir with two sessions: ses-1's nidm.ttl holds ses-1 only"""
+    ses2_stems = [s.replace("ses-1", "ses-2") for s in SES1_STEMS]
+    mriqc_root = _mriqc_tree(tmp_path / "existing", SES1_STEMS + ses2_stems)
+    out = tmp_path / "out"
+    monkeypatch.setattr(sys, "argv", [
+        "run.py", str(_bids_dir(tmp_path / "bids")), str(out), "participant",
+        "--participant-label", "51209", "--session-label", "1",
+        "--mriqc-output-dir", str(mriqc_root),
+        "--nidm-input-dir", str(tmp_path / "no_nidm"),
+    ])
+
+    assert main() == 0
+    links = _linked_images(out / "sub-51209" / "ses-1" / "nidm.ttl")
+    assert sorted(links) == sorted(f"{s}.json" for s in SES1_STEMS)
+
+
+def _process_session(tmp_path, stems, session_id, logger, nidm_input_dir=None):
+    output_dir = tmp_path / "out"
+    subject_dir = output_dir / "sub-51209" / f"ses-{session_id}"
+    mriqc_dir = _mriqc_tree(tmp_path / "existing", stems)
+    return process_subject(
+        subject_id="51209", bids_dir=tmp_path / "bids", output_dir=output_dir,
+        subject_dir=subject_dir, mriqc_dir=mriqc_dir, session_id=session_id,
+        nidm_input_dir=nidm_input_dir or tmp_path / "no_nidm", skip_mriqc=True,
+        skip_nidm=True, logger=logger,
+    ), subject_dir
+
+
+def test_session_run_skips_iqms_without_a_session(tmp_path, logger, caplog):
+    """An IQM JSON with no ses entity cannot belong to the session and is logged"""
+    stems = ["sub-51209_ses-1_run-1_T1w"]
+    no_ses = tmp_path / "existing" / "mriqc" / "sub-51209" / "anat" / "sub-51209_T1w.json"
+    no_ses.parent.mkdir(parents=True, exist_ok=True)
+    no_ses.write_text(json.dumps(T1W_IQMS))
+    with caplog.at_level(logging.INFO):
+        ok, _ = _process_session(tmp_path, stems, "1", logger)
+
+    assert ok is True
+    assert "sub-51209_T1w.json" in caplog.text
+    assert "Found 1 MRIQC JSON file(s)" in caplog.text
+
+
+def test_session_run_without_iqms_for_its_session_fails(tmp_path, logger, caplog):
+    """IQMs for other sessions only: the session's job fails, naming it"""
+    with caplog.at_level(logging.ERROR):
+        ok, _ = _process_session(tmp_path, SES1_STEMS, "3", logger)
+
+    assert ok is False
+    assert "ses-3" in caplog.text
+
+
+def test_jsonld_input_nidm_fails_without_writing_nidm(tmp_path, logger, caplog):
+    """A JSON-LD input NIDM is refused by name, not misread as Turtle"""
+    g = rdflib.Graph()
+    g.parse(data=input_nidm_ttl(), format="turtle")
+    found = tmp_path / "nidm" / "sub-51209" / "sub-51209.jsonld"
+    found.parent.mkdir(parents=True)
+    g.serialize(destination=str(found), format="json-ld")
+    output_dir = tmp_path / "out"
+    subject_dir = output_dir / "sub-51209" / "ses-1"
+    mriqc_dir = _mriqc_tree(tmp_path / "existing", SES1_STEMS)
+    with caplog.at_level(logging.ERROR):
+        ok = process_subject(
+            subject_id="51209", bids_dir=tmp_path / "bids", output_dir=output_dir,
+            subject_dir=subject_dir, mriqc_dir=mriqc_dir, session_id="1",
+            nidm_input_dir=tmp_path / "nidm", skip_mriqc=True, skip_nidm=False,
+            logger=logger,
+        )
+
+    assert ok is False
+    assert str(found) in caplog.text
+    assert not (subject_dir / "nidm.ttl").exists()

@@ -19,6 +19,7 @@ from src.nidm_converter.json_to_csv import (
     create_software_metadata_csv,
     extract_bids_info,
     extract_image_entities,
+    extract_session_label,
     remove_keys,
 )
 from src.nidm_converter.csv_to_nidm import convert_csv_to_nidm
@@ -354,6 +355,23 @@ def test_extract_image_entities_ignores_lookalike_substrings():
     """Only a whole "_acq-" entity counts, not "acq-" inside another value"""
     entities = extract_image_entities(Path("sub-01_task-xacq-1_bold.json"))
     assert entities["acq"] == ""
+
+
+# The session of an IQM file decides which session's nidm.ttl may hold it.
+def test_extract_session_label_reads_the_filename():
+    """The ses entity of the filename, not a ses- directory above it"""
+    path = Path("out/sub-01/ses-1/mriqc/sub-01/ses-2/anat/sub-01_ses-2_T1w.json")
+    assert extract_session_label(path) == "2"
+
+
+def test_extract_session_label_absent_is_none():
+    """A filename without a ses entity has no session"""
+    assert extract_session_label(Path("ses-1/anat/sub-01_T1w.json")) is None
+
+
+def test_extract_session_label_ignores_lookalike_substrings():
+    """Only a whole "_ses-" entity counts"""
+    assert extract_session_label(Path("sub-01_task-xses-1_bold.json")) is None
 
 
 def _write_iqm_pair(tmpdir, sample):

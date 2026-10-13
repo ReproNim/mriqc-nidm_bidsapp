@@ -37,7 +37,7 @@ from .nidm_converter import (
     NIDM_FILENAME,
 )
 from .nidm_converter.csv_to_nidm import check_csv2nidm_available
-from .nidm_converter.json_to_csv import combine_iqm_csvs
+from .nidm_converter.json_to_csv import combine_iqm_csvs, extract_session_label
 from .nidm_converter.nidm_merge import check_iqm_records, merge_iqms_into_nidm
 from .validators import validate_bids_directory, validate_output_directory
 from .nidm_converter.data import get_mriqc_dictionary
@@ -71,6 +71,7 @@ def _write_iqm_nidm(
     augmentation_target: Optional[Path],
     subject_ttl_file: Path,
     logger: logging.Logger,
+    source_nidm: Optional[Path] = None,
 ) -> None:
     """Write all IQM rows of a job to subject_ttl_file with one csv2nidm call.
 
@@ -82,6 +83,10 @@ def _write_iqm_nidm(
     dropped or linked to a BOLD acquisition. So csv2nidm writes the IQM
     records into a new graph, and that graph is either used as is or
     attached to the input NIDM with each record linked to its own image.
+
+    source_nidm is the input NIDM as found in the NIDM input directory;
+    augmentation_target is the copy of it being written. Errors name the
+    source, since that is the file to fix.
 
     Raises:
         RuntimeError: If csv2nidm fails
@@ -100,9 +105,34 @@ def _write_iqm_nidm(
         raise RuntimeError(f"Failed to convert {iqm_csv.name} to NIDM")
 
     if augmentation_target:
-        merge_iqms_into_nidm(augmentation_target, iqm_ttl, subject_ttl_file, logger)
+        merge_iqms_into_nidm(
+            augmentation_target, iqm_ttl, subject_ttl_file, logger,
+            source=source_nidm,
+        )
     else:
         shutil.copyfile(iqm_ttl, subject_ttl_file)
+
+
+def _iqm_jsons_of_session(
+    json_files: List[Path], session_id: str, logger: logging.Logger
+) -> List[Path]:
+    """The IQM JSONs whose filename carries ses-<session_id>; the rest are logged.
+
+    A session run writes one session's nidm.ttl, so it may only carry that
+    session's IQMs. MRIQC's own output for a session run holds just that
+    session, but --mriqc-output-dir can point at a standard MRIQC tree with
+    every session of the subject in it.
+    """
+    in_session, other_sessions = [], []
+    for f in json_files:
+        same = extract_session_label(f) == session_id
+        (in_session if same else other_sessions).append(f)
+    if other_sessions:
+        logger.info(
+            f"Skipping {len(other_sessions)} MRIQC JSON file(s) that are not "
+            f"from ses-{session_id}: " + ", ".join(f.name for f in other_sessions)
+        )
+    return in_session
 
 
 def process_subject(
@@ -176,6 +206,15 @@ def process_subject(
             logger.warning(f"No MRIQC JSON files found for sub-{subject_id}")
             return False
 
+        if session_id is not None:
+            json_files = _iqm_jsons_of_session(json_files, session_id, logger)
+            if not json_files:
+                logger.error(
+                    f"No MRIQC JSON files for sub-{subject_id} ses-{session_id} "
+                    f"in {subject_mriqc_dir}"
+                )
+                return False
+
         logger.info(f"Found {len(json_files)} MRIQC JSON file(s) for sub-{subject_id}")
 
         if skip_nidm:
@@ -204,6 +243,17 @@ def process_subject(
                     "subject-level nidm.ttl. "
                     "Pass --session-label to write per-session NIDM instead."
                 )
+
+        # The input NIDM is copied to nidm.ttl and parsed as Turtle, so a
+        # JSON-LD input (the lookup also matches *.jsonld) would fail later
+        # with a Turtle syntax error and leave JSON-LD text named nidm.ttl.
+        if existing_nidm is not None and existing_nidm.suffix != ".ttl":
+            logger.error(
+                f"Input NIDM {existing_nidm} is not Turtle (.ttl); the app reads "
+                "input NIDM as Turtle only. Convert it to Turtle or regenerate "
+                "it with bidsmri2nidm."
+            )
+            return False
 
         # NIDM output sits directly in the subject directory, beside the analysis
         # results, and is ALWAYS named nidm.ttl -- subject identity is carried by
@@ -271,6 +321,7 @@ def process_subject(
                     augmentation_target=augmentation_target,
                     subject_ttl_file=subject_ttl_file,
                     logger=logger,
+                    source_nidm=existing_nidm,
                 )
             except Exception as e:
                 logger.error(f"Error during NIDM conversion: {e}")

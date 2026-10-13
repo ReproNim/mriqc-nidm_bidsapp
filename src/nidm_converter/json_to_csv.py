@@ -236,6 +236,31 @@ def extract_image_entities(json_file_path: Path) -> Dict[str, str]:
     return entities
 
 
+def extract_session_label(json_file_path: Path) -> Optional[str]:
+    """
+    Session label of an MRIQC IQM file, from its filename only.
+
+    MRIQC keeps the BIDS name of the image it rated, and a BIDS name carries
+    ses-<label> whenever the dataset has sessions. Directories are ignored:
+    an output or input path above the MRIQC tree can itself contain a
+    ses-<label> component that says nothing about the image.
+
+    Args:
+        json_file_path: Path to the MRIQC JSON file
+
+    Returns:
+        The session label, or None when the filename has no ses entity
+
+    Examples:
+        >>> extract_session_label(Path('out/ses-1/sub-01_ses-2_T1w.json'))
+        '2'
+        >>> extract_session_label(Path('sub-01_T1w.json')) is None
+        True
+    """
+    match = re.search(r"(?:^|_)ses-([^_]+)", json_file_path.name)
+    return match.group(1) if match else None
+
+
 def convert_mriqc_json_to_csv(
     json_file: Path,
     output_csv: Path,

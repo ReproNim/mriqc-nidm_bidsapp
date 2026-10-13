@@ -156,8 +156,12 @@ of these that exists in the NIDM input directory (`--nidm-input-dir`, default
 1. `sub-{id}/ses-{label}/nidm.ttl`
 2. `sub-{id}/ses-{label}/sub-{id}_ses-{label}.ttl`
 3. `sub-{id}/nidm.ttl`
-4. any `*.ttl`, `*.jsonld` or `*.json-ld` in `sub-{id}/`
+4. any `*.ttl` in `sub-{id}/`
 5. `nidm.ttl` (dataset-level file)
+
+Input NIDM must be Turtle. When `sub-{id}/` has no `*.ttl` but has a
+`*.jsonld` or `*.json-ld` file, step 4 picks that file and the job fails with
+an error naming it, instead of reading it.
 
 #### How IQM records are written
 
@@ -166,6 +170,11 @@ into a new graph. When there is an input NIDM, the app attaches that graph to
 it: each IQM record's derivative activity gets `prov:used` pointing at the
 acquisition whose image has the same BIDS name as the IQM JSON, and is
 associated with the input's participant and project.
+
+Under `--session-label`, only IQM JSONs whose filename carries that session
+(`ses-{label}`) are written. A `--mriqc-output-dir` holding several sessions
+of a subject therefore still gives each session's `nidm.ttl` its own records
+only; the others are skipped and listed in the log.
 
 csv2nidm's own append mode (`-nidm`) is not used. It matches a derivative to
 an acquisition by session/task/run, and bidsmri2nidm records run and task only
