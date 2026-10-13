@@ -16,8 +16,11 @@ ENV PATH=/usr/local/bin:$PATH
 # =======================================
 # BIDS App Setup
 # =======================================
-# Copy application files to /opt
+# Copy application files to /opt. COPY keeps the build context's file modes,
+# so a file that is mode 600 in the checkout would be unreadable for a
+# non-root --user; make the app's files readable by everyone.
 COPY . /opt/
+RUN chmod -R a+rX /opt/src /opt/requirements.txt /opt/setup.py /opt/setup.cfg /opt/VERSION
 
 # Install Python dependencies using conda/pip hybrid approach
 # See requirements.txt for full dependency list
@@ -37,6 +40,15 @@ RUN micromamba install -n base -y -c conda-forge \
     pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir --upgrade 'rdflib>=7.0.0,<8' && \
     pip install --no-deps -e .
+
+# Everything the app reads must be usable by a non-root --user, the same check
+# Singularity runs at the end of %post.
+RUN unreadable="$(find /opt/src /opt/requirements.txt /opt/setup.py /opt/setup.cfg /opt/VERSION \( -type f ! -perm -o=r \) -o \( -type d ! -perm -o=rx \))" && \
+    if [ -n "$unreadable" ]; then \
+        echo "ERROR: not readable by other users:" >&2; \
+        echo "$unreadable" >&2; \
+        exit 1; \
+    fi
 
 # =======================================
 # Runtime Configuration

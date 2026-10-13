@@ -20,8 +20,21 @@ From: nipreps/mriqc:25.0.0rc0
     ./VERSION /opt/VERSION
 
 %post
+    # Fail the build on the first failing command. %post is one scriptlet whose
+    # exit status is its last command's, so without this a failed pip install
+    # would be hidden by the permission check that now follows it.
+    set -e
+
     # Create opt directory for application code
     mkdir -p /opt
+
+    # %files keeps each file's mode from the checkout it was copied from, and a
+    # SIF keeps the builder's uid. A file that is mode 600 there is unreadable
+    # for every other account running the image: the 0.1.0 image shipped
+    # src/mriqc/__init__.py and src/validators.py that way, so `import src.run`
+    # failed for anyone but its builder. a+rX: files readable, directories
+    # traversable, nothing made executable.
+    chmod -R a+rX /opt/src /opt/requirements.txt /opt/setup.py /opt/setup.cfg /opt/VERSION
 
     # Install system dependencies (minimal - conda already provides Python/pip)
     apt-get update && \
@@ -49,6 +62,15 @@ From: nipreps/mriqc:25.0.0rc0
     pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir --upgrade 'rdflib>=7.0.0,<8' && \
     pip install --no-deps -e .
+
+    # Last step: everything this recipe put under /opt must be usable by
+    # whoever runs the image, not only by the account that built it.
+    unreadable="$(find /opt/src /opt/requirements.txt /opt/setup.py /opt/setup.cfg /opt/VERSION \( -type f ! -perm -o=r \) -o \( -type d ! -perm -o=rx \))"
+    if [ -n "$unreadable" ]; then
+        echo "ERROR: not readable by other users (the image only works for its builder):" >&2
+        echo "$unreadable" >&2
+        exit 1
+    fi
 
 %environment
     # Add opt to Python path
