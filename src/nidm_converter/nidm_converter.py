@@ -75,25 +75,31 @@ def detect_existing_nidm(
     subject_id: str,
     nidm_input_dir: Optional[Path] = None,
     bids_dir: Optional[Path] = None,
-    logger: Optional[logging.Logger] = None
+    logger: Optional[logging.Logger] = None,
+    session_id: Optional[str] = None,
 ) -> Optional[Path]:
     """
-    Detect existing NIDM file for subject.
+    Detect existing NIDM file for subject (and session).
 
     Searches for NIDM files in either the provided nidm_input_dir or the
-    convention-based location (BIDS_DIR/../NIDM/sub-{subject_id}/).
+    convention-based location (BIDS_DIR/../NIDM/), most specific first:
 
-    Search order (first match returned):
-    1. nidm.ttl (preferred)
-    2. Any *.ttl file
-    3. Any *.jsonld file
-    4. Any *.json-ld file
+    1. sub-{id}/ses-{session}/nidm.ttl                  (session given)
+    2. sub-{id}/ses-{session}/sub-{id}_ses-{session}.ttl (session given)
+    3. sub-{id}/nidm.ttl
+    4. sub-{id}/*.ttl, then *.jsonld, then *.json-ld
+    5. nidm.ttl at the top of the NIDM directory (dataset-level file)
+
+    Some shared NIDM inputs (e.g. ABIDE II UCLA_Long) keep one file per
+    session with nothing directly under sub-{id}/, so a session-level run
+    must look in ses-{session}/ first.
 
     Args:
         subject_id: Subject identifier (without "sub-" prefix)
         nidm_input_dir: Optional explicit NIDM input directory (preferred)
         bids_dir: Optional BIDS dataset directory (for convention-based lookup)
         logger: Optional logger instance
+        session_id: Optional session label (without "ses-" prefix)
 
     Returns:
         Path to existing NIDM file, or None if not found
@@ -119,20 +125,40 @@ def detect_existing_nidm(
     if logger is None:
         logger = logging.getLogger(__name__)
 
-    # Determine search directory
+    # Determine the NIDM root
     if nidm_input_dir is not None:
         # Explicit NIDM input directory (standards-compliant)
-        search_dir = nidm_input_dir / f"sub-{subject_id}"
+        nidm_root = nidm_input_dir
         logger.debug(f"Using explicit NIDM input directory: {nidm_input_dir}")
     elif bids_dir is not None:
         # Convention-based location (backward compatibility)
-        search_dir = bids_dir.parent / "NIDM" / f"sub-{subject_id}"
+        nidm_root = bids_dir.parent / "NIDM"
         logger.debug("Using convention-based NIDM location: BIDS/../NIDM/")
     else:
         raise ValueError("Either nidm_input_dir or bids_dir must be provided")
 
-    # Use shared search logic
-    return _search_nidm_in_directory(search_dir, logger)
+    subject_dir = nidm_root / f"sub-{subject_id}"
+
+    if session_id:
+        session_dir = subject_dir / f"ses-{session_id}"
+        for candidate in (
+            session_dir / "nidm.ttl",
+            session_dir / f"sub-{subject_id}_ses-{session_id}.ttl",
+        ):
+            if candidate.is_file():
+                logger.info(f"Found existing NIDM (session): {candidate}")
+                return candidate
+
+    found = _search_nidm_in_directory(subject_dir, logger)
+    if found is not None:
+        return found
+
+    dataset_level = nidm_root / "nidm.ttl"
+    if dataset_level.is_file():
+        logger.info(f"Found existing NIDM (dataset-level): {dataset_level}")
+        return dataset_level
+
+    return None
 
 
 def copy_and_prepare_nidm(

@@ -147,6 +147,44 @@ in `mriqc_dictionary_v1.csv`; csv2nidm needs a dictionary row for every IQM
 CSV column it annotates, and stops to prompt on stdin for any column without
 one.
 
+#### Input NIDM lookup
+
+For a subject (and session, under `--session-label`) the app uses the first
+of these that exists in the NIDM input directory (`--nidm-input-dir`, default
+`<bids_dir>/../NIDM`):
+
+1. `sub-{id}/ses-{label}/nidm.ttl`
+2. `sub-{id}/ses-{label}/sub-{id}_ses-{label}.ttl`
+3. `sub-{id}/nidm.ttl`
+4. any `*.ttl` in `sub-{id}/`
+5. `nidm.ttl` (dataset-level file)
+
+Input NIDM must be Turtle. When `sub-{id}/` has no `*.ttl` but has a
+`*.jsonld` or `*.json-ld` file, step 4 picks that file and the job fails with
+an error naming it, instead of reading it.
+
+#### How IQM records are written
+
+All IQM JSONs of a job go to csv2nidm as one multi-row CSV, which it writes
+into a new graph. When there is an input NIDM, the app attaches that graph to
+it: each IQM record's derivative activity gets `prov:used` pointing at the
+acquisition whose image has the same BIDS name as the IQM JSON, and is
+associated with the input's participant and project.
+
+Under `--session-label`, only IQM JSONs whose filename carries that session
+(`ses-{label}`) are written. A `--mriqc-output-dir` holding several sessions
+of a subject therefore still gives each session's `nidm.ttl` its own records
+only; the others are skipped and listed in the log.
+
+csv2nidm's own append mode (`-nidm`) is not used. It matches a derivative to
+an acquisition by session/task/run, and bidsmri2nidm records run and task only
+for functional images, so in that mode T1w IQMs were either dropped or linked
+to a BOLD acquisition with the same run number, with exit status 0.
+
+A job fails (non-zero exit) when an IQM record matches no acquisition or
+several, or when `nidm.ttl` does not end up with exactly one IQM record per
+IQM JSON.
+
 **Running under BABS:** pair this layout with `zip_foldernames: {${subid}: "<version>"}`
 so the zip's top-level folder is `sub-{id}` and results unzip straight into
 `<derivative_name>/sub-{id}/...`.

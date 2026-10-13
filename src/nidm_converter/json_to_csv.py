@@ -236,6 +236,31 @@ def extract_image_entities(json_file_path: Path) -> Dict[str, str]:
     return entities
 
 
+def extract_session_label(json_file_path: Path) -> Optional[str]:
+    """
+    Session label of an MRIQC IQM file, from its filename only.
+
+    MRIQC keeps the BIDS name of the image it rated, and a BIDS name carries
+    ses-<label> whenever the dataset has sessions. Directories are ignored:
+    an output or input path above the MRIQC tree can itself contain a
+    ses-<label> component that says nothing about the image.
+
+    Args:
+        json_file_path: Path to the MRIQC JSON file
+
+    Returns:
+        The session label, or None when the filename has no ses entity
+
+    Examples:
+        >>> extract_session_label(Path('out/ses-1/sub-01_ses-2_T1w.json'))
+        '2'
+        >>> extract_session_label(Path('sub-01_T1w.json')) is None
+        True
+    """
+    match = re.search(r"(?:^|_)ses-([^_]+)", json_file_path.name)
+    return match.group(1) if match else None
+
+
 def convert_mriqc_json_to_csv(
     json_file: Path,
     output_csv: Path,
@@ -355,6 +380,39 @@ def convert_mriqc_json_to_csv(
     logger.info(f"  Rows: {len(df)}")
 
     return output_csv, software_csv_path
+
+
+def combine_iqm_csvs(
+    csv_paths: List[Path],
+    output_csv: Path,
+    logger: Optional[logging.Logger] = None,
+) -> Path:
+    """
+    Stack one-row IQM CSVs into a single CSV for one csv2nidm call.
+
+    Anatomical and functional IQMs have different columns; a cell for a
+    metric an image does not have is left empty, which csv2nidm skips.
+    Values are carried over as text, so identifiers such as "01" or the
+    "None" task of anatomical images are not reinterpreted.
+
+    Args:
+        csv_paths: CSVs written by convert_mriqc_json_to_csv
+        output_csv: Path for the combined CSV
+        logger: Optional logger instance
+
+    Returns:
+        Path to the combined CSV
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    frames = [
+        pd.read_csv(path, dtype=str, keep_default_na=False) for path in csv_paths
+    ]
+    combined = pd.concat(frames, ignore_index=True, sort=False)
+    combined.to_csv(output_csv, index=False)
+    logger.info(f"Combined {len(frames)} IQM row(s) into {output_csv}")
+    return output_csv
 
 
 # Command-line interface (for standalone usage)

@@ -14,10 +14,12 @@ import pandas as pd
 import pytest
 
 from src.nidm_converter.json_to_csv import (
+    combine_iqm_csvs,
     convert_mriqc_json_to_csv,
     create_software_metadata_csv,
     extract_bids_info,
     extract_image_entities,
+    extract_session_label,
     remove_keys,
 )
 from src.nidm_converter.csv_to_nidm import convert_csv_to_nidm
@@ -355,6 +357,23 @@ def test_extract_image_entities_ignores_lookalike_substrings():
     assert entities["acq"] == ""
 
 
+# The session of an IQM file decides which session's nidm.ttl may hold it.
+def test_extract_session_label_reads_the_filename():
+    """The ses entity of the filename, not a ses- directory above it"""
+    path = Path("out/sub-01/ses-1/mriqc/sub-01/ses-2/anat/sub-01_ses-2_T1w.json")
+    assert extract_session_label(path) == "2"
+
+
+def test_extract_session_label_absent_is_none():
+    """A filename without a ses entity has no session"""
+    assert extract_session_label(Path("ses-1/anat/sub-01_T1w.json")) is None
+
+
+def test_extract_session_label_ignores_lookalike_substrings():
+    """Only a whole "_ses-" entity counts"""
+    assert extract_session_label(Path("sub-01_task-xses-1_bold.json")) is None
+
+
 def _write_iqm_pair(tmpdir, sample):
     """Two IQM JSONs for the same sub/ses/run, one with acq-hires."""
     paths = []
@@ -428,3 +447,20 @@ def test_acq_label_reaches_nidm(sample_mriqc_json, logger):
         text = ttl.read_text()
     assert 'nidm:sourceVariable "acq"' in text
     assert '"hires"' in text
+
+
+def test_combine_iqm_csvs_stacks_rows_as_text(tmp_path, logger):
+    """Anat and func rows share one CSV; identifiers stay as written"""
+    anat = tmp_path / "anat.csv"
+    anat.write_text("cjv,subject_id,ses,task,run,acq\n0.5,01,1,None,1,hires\n")
+    func = tmp_path / "func.csv"
+    func.write_text("fd_mean,subject_id,ses,task,run,acq\n0.1,01,1,rest,1,\n")
+
+    out = combine_iqm_csvs([anat, func], tmp_path / "all.csv", logger)
+
+    df = pd.read_csv(out, dtype=str, keep_default_na=False)
+    assert len(df) == 2
+    assert list(df["subject_id"]) == ["01", "01"]
+    assert list(df["task"]) == ["None", "rest"]
+    assert list(df["cjv"]) == ["0.5", ""]
+    assert list(df["fd_mean"]) == ["", "0.1"]

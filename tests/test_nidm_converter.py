@@ -257,3 +257,86 @@ def test_is_nidm_file_false_cases():
     assert is_nidm_file(Path("data.txt")) is False
     assert is_nidm_file(Path("data")) is False
     assert is_nidm_file(Path("data.py")) is False
+
+
+# Session-aware lookup. ABIDE II UCLA_Long ships its input NIDM per session,
+# at sub-<id>/ses-<n>/nidm.ttl, with nothing directly under sub-<id>/.
+def _touch(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("@prefix nidm: <http://purl.org/nidash/nidm#> .")
+    return path
+
+
+def test_detect_existing_nidm_session_layout(tmp_path, logger):
+    """A session-level run finds sub-<id>/ses-<s>/nidm.ttl"""
+    _touch(tmp_path / "sub-51209" / "ses-1" / "nidm.ttl")
+    wanted = _touch(tmp_path / "sub-51209" / "ses-2" / "nidm.ttl")
+
+    result = detect_existing_nidm(
+        subject_id="51209", nidm_input_dir=tmp_path, session_id="2", logger=logger
+    )
+    assert result == wanted
+
+
+def test_detect_existing_nidm_session_named_ttl(tmp_path, logger):
+    """sub-<id>/ses-<s>/sub-<id>_ses-<s>.ttl is the second choice"""
+    wanted = _touch(tmp_path / "sub-01" / "ses-a" / "sub-01_ses-a.ttl")
+
+    result = detect_existing_nidm(
+        subject_id="01", nidm_input_dir=tmp_path, session_id="a", logger=logger
+    )
+    assert result == wanted
+
+
+def test_detect_existing_nidm_session_beats_subject_level(tmp_path, logger):
+    """The session file is more specific than the subject-level one"""
+    _touch(tmp_path / "sub-01" / "nidm.ttl")
+    wanted = _touch(tmp_path / "sub-01" / "ses-a" / "nidm.ttl")
+
+    result = detect_existing_nidm(
+        subject_id="01", nidm_input_dir=tmp_path, session_id="a", logger=logger
+    )
+    assert result == wanted
+
+
+def test_detect_existing_nidm_session_falls_back_to_subject(tmp_path, logger):
+    """With no session file, the subject-level nidm.ttl is used"""
+    wanted = _touch(tmp_path / "sub-01" / "nidm.ttl")
+
+    result = detect_existing_nidm(
+        subject_id="01", nidm_input_dir=tmp_path, session_id="a", logger=logger
+    )
+    assert result == wanted
+
+
+def test_detect_existing_nidm_dataset_level_fallback(tmp_path, logger):
+    """<dir>/nidm.ttl is the last resort"""
+    wanted = _touch(tmp_path / "nidm.ttl")
+
+    result = detect_existing_nidm(
+        subject_id="01", nidm_input_dir=tmp_path, session_id="a", logger=logger
+    )
+    assert result == wanted
+
+
+def test_detect_existing_nidm_subject_glob_before_dataset_level(tmp_path, logger):
+    """Any TTL under sub-<id>/ still wins over the dataset-level file"""
+    _touch(tmp_path / "nidm.ttl")
+    wanted = _touch(tmp_path / "sub-01" / "other.ttl")
+
+    result = detect_existing_nidm(
+        subject_id="01", nidm_input_dir=tmp_path, logger=logger
+    )
+    assert result == wanted
+
+
+def test_detect_existing_nidm_session_via_bids_convention(tmp_path, logger):
+    """The BIDS/../NIDM convention honours the session too"""
+    bids = tmp_path / "BIDS"
+    bids.mkdir()
+    wanted = _touch(tmp_path / "NIDM" / "sub-01" / "ses-2" / "nidm.ttl")
+
+    result = detect_existing_nidm(
+        subject_id="01", bids_dir=bids, session_id="2", logger=logger
+    )
+    assert result == wanted

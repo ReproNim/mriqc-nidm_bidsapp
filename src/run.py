@@ -18,7 +18,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from . import __version__
 from .mriqc.mriqc_runner import MRIQCWrapper
@@ -37,6 +37,8 @@ from .nidm_converter import (
     NIDM_FILENAME,
 )
 from .nidm_converter.csv_to_nidm import check_csv2nidm_available
+from .nidm_converter.json_to_csv import combine_iqm_csvs, extract_session_label
+from .nidm_converter.nidm_merge import check_iqm_records, merge_iqms_into_nidm
 from .validators import validate_bids_directory, validate_output_directory
 from .nidm_converter.data import get_mriqc_dictionary
 
@@ -59,6 +61,78 @@ def _cleanup_nidm_intermediates(subject_dir: Path, logger: logging.Logger) -> No
                 logger.debug(f"Removed NIDM intermediate: {leftover.name}")
             except OSError as e:
                 logger.warning(f"Could not remove {leftover}: {e}")
+
+
+def _write_iqm_nidm(
+    csv_paths: List[Path],
+    software_csv_path: Path,
+    dictionary_csv: Path,
+    staging_dir: Path,
+    augmentation_target: Optional[Path],
+    subject_ttl_file: Path,
+    logger: logging.Logger,
+    source_nidm: Optional[Path] = None,
+) -> None:
+    """Write all IQM rows of a job to subject_ttl_file with one csv2nidm call.
+
+    Calling csv2nidm once per IQM JSON loses data: from the second call on
+    it appends (-nidm), and in that mode it skips any row it cannot match to
+    an acquisition by session/task/run. That is every row when the target is
+    a graph csv2nidm built itself; when the target came from bidsmri2nidm,
+    which records run and task only for functional images, T1w rows are
+    dropped or linked to a BOLD acquisition. So csv2nidm writes the IQM
+    records into a new graph, and that graph is either used as is or
+    attached to the input NIDM with each record linked to its own image.
+
+    source_nidm is the input NIDM as found in the NIDM input directory;
+    augmentation_target is the copy of it being written. Errors name the
+    source, since that is the file to fix.
+
+    Raises:
+        RuntimeError: If csv2nidm fails
+        IQMLinkError: If an IQM record cannot be linked to the input NIDM
+    """
+    iqm_csv = combine_iqm_csvs(csv_paths, staging_dir / "mriqc_iqms.csv", logger)
+    iqm_ttl = staging_dir / "mriqc_iqms.ttl"
+    if not convert_csv_to_nidm(
+        csv_file=iqm_csv,
+        dictionary_csv=dictionary_csv,
+        software_metadata_csv=software_csv_path,
+        output_ttl=iqm_ttl,
+        existing_nidm=None,
+        logger=logger,
+    ):
+        raise RuntimeError(f"Failed to convert {iqm_csv.name} to NIDM")
+
+    if augmentation_target:
+        merge_iqms_into_nidm(
+            augmentation_target, iqm_ttl, subject_ttl_file, logger,
+            source=source_nidm,
+        )
+    else:
+        shutil.copyfile(iqm_ttl, subject_ttl_file)
+
+
+def _iqm_jsons_of_session(
+    json_files: List[Path], session_id: str, logger: logging.Logger
+) -> List[Path]:
+    """The IQM JSONs whose filename carries ses-<session_id>; the rest are logged.
+
+    A session run writes one session's nidm.ttl, so it may only carry that
+    session's IQMs. MRIQC's own output for a session run holds just that
+    session, but --mriqc-output-dir can point at a standard MRIQC tree with
+    every session of the subject in it.
+    """
+    in_session, other_sessions = [], []
+    for f in json_files:
+        same = extract_session_label(f) == session_id
+        (in_session if same else other_sessions).append(f)
+    if other_sessions:
+        logger.info(
+            f"Skipping {len(other_sessions)} MRIQC JSON file(s) that are not "
+            f"from ses-{session_id}: " + ", ".join(f.name for f in other_sessions)
+        )
+    return in_session
 
 
 def process_subject(
@@ -99,7 +173,8 @@ def process_subject(
             subject_id=subject_id,
             nidm_input_dir=nidm_input_dir,
             bids_dir=bids_dir if not nidm_input_dir else None,
-            logger=logger
+            logger=logger,
+            session_id=session_id,
         )
 
         # Step 2: Find MRIQC outputs
@@ -131,6 +206,15 @@ def process_subject(
             logger.warning(f"No MRIQC JSON files found for sub-{subject_id}")
             return False
 
+        if session_id is not None:
+            json_files = _iqm_jsons_of_session(json_files, session_id, logger)
+            if not json_files:
+                logger.error(
+                    f"No MRIQC JSON files for sub-{subject_id} ses-{session_id} "
+                    f"in {subject_mriqc_dir}"
+                )
+                return False
+
         logger.info(f"Found {len(json_files)} MRIQC JSON file(s) for sub-{subject_id}")
 
         if skip_nidm:
@@ -159,6 +243,17 @@ def process_subject(
                     "subject-level nidm.ttl. "
                     "Pass --session-label to write per-session NIDM instead."
                 )
+
+        # The input NIDM is copied to nidm.ttl and parsed as Turtle, so a
+        # JSON-LD input (the lookup also matches *.jsonld) would fail later
+        # with a Turtle syntax error and leave JSON-LD text named nidm.ttl.
+        if existing_nidm is not None and existing_nidm.suffix != ".ttl":
+            logger.error(
+                f"Input NIDM {existing_nidm} is not Turtle (.ttl); the app reads "
+                "input NIDM as Turtle only. Convert it to Turtle or regenerate "
+                "it with bidsmri2nidm."
+            )
+            return False
 
         # NIDM output sits directly in the subject directory, beside the analysis
         # results, and is ALWAYS named nidm.ttl -- subject identity is carried by
@@ -195,13 +290,13 @@ def process_subject(
             augmentation_target = subject_ttl_file
             logger.info(f"Will augment existing NIDM: {subject_ttl_file}")
 
-        # Track failures to return accurate status
+        # Step 3b: Convert every IQM JSON to a one-row CSV
         any_scan_failed = False
-
+        converted_jsons = []
+        csv_paths = []
+        software_csv_path = None
         for idx, json_file in enumerate(json_files):
             logger.info(f"Converting {json_file.name} ({idx + 1}/{len(json_files)})")
-
-            # Step 3b: Convert JSON → CSV
             csv_file = staging_dir / f"{json_file.stem}.csv"
             try:
                 csv_path, software_csv_path = convert_mriqc_json_to_csv(
@@ -211,40 +306,39 @@ def process_subject(
                 logger.error(f"Failed to convert {json_file.name} to CSV: {e}")
                 any_scan_failed = True
                 continue
+            converted_jsons.append(json_file)
+            csv_paths.append(csv_path)
 
-            # Step 3c: Convert CSV → NIDM
-            # All scans go into the same canonical TTL file
-            # First scan creates it, subsequent scans augment it
-            existing_nidm_arg = (
-                augmentation_target
-                if augmentation_target and augmentation_target.exists()
-                else None
-            )
-
+        # Step 3c: One csv2nidm call for all IQM rows of this job, attached
+        # to the input NIDM when there is one (see _write_iqm_nidm).
+        if csv_paths:
             try:
-                success = convert_csv_to_nidm(
-                    csv_file=csv_path,
+                _write_iqm_nidm(
+                    csv_paths=csv_paths,
+                    software_csv_path=software_csv_path,
                     dictionary_csv=dictionary_csv,
-                    software_metadata_csv=software_csv_path,
-                    output_ttl=subject_ttl_file,
-                    existing_nidm=existing_nidm_arg,
+                    staging_dir=staging_dir,
+                    augmentation_target=augmentation_target,
+                    subject_ttl_file=subject_ttl_file,
                     logger=logger,
+                    source_nidm=existing_nidm,
                 )
-
-                if not success:
-                    logger.error(f"Failed to convert {csv_path.name} to NIDM")
-                    any_scan_failed = True
-                    continue
-
-                # After first successful conversion, set augmentation target
-                # so subsequent scans augment the same file
-                if not augmentation_target:
-                    augmentation_target = subject_ttl_file
-
             except Exception as e:
                 logger.error(f"Error during NIDM conversion: {e}")
-                any_scan_failed = True
-                continue
+                return False
+
+            # Step 3d: Every converted IQM JSON must be exactly one record.
+            problems = check_iqm_records(subject_ttl_file, converted_jsons)
+            if problems:
+                logger.error(
+                    f"{subject_ttl_file} does not hold one MRIQC record per IQM "
+                    f"JSON for sub-{subject_id}: " + "; ".join(problems)
+                )
+                return False
+            logger.info(
+                f"Wrote {len(converted_jsons)} MRIQC IQM record(s) to "
+                f"{subject_ttl_file.name}"
+            )
 
         # csv2nidm writes a "<nidm_file>.bak" backup next to its target on every
         # append, and the create path drops a "<out>.json" sidecar. Both are

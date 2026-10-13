@@ -115,7 +115,8 @@ class TestProcessSubjectLayout:
 
         with patch("src.run.convert_mriqc_json_to_csv", side_effect=fake_json2csv), \
              patch("src.run.convert_csv_to_nidm", side_effect=fake_csv2nidm), \
-             patch("src.run.get_mriqc_dictionary", return_value=tmp_path / "d.csv"):
+             patch("src.run.get_mriqc_dictionary", return_value=tmp_path / "d.csv"), \
+             patch("src.run.check_iqm_records", return_value=[]):
             ok = process_subject(
                 subject_id="01",
                 bids_dir=tmp_path / "bids",
