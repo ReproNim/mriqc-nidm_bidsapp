@@ -213,7 +213,7 @@ def create_dataset_description(
             {
                 "Name": "MRIQC-NIDM BIDSAPP",
                 "Version": version,
-                "CodeURL": "https://github.com/sensein/mriqc-nidm_bidsapp"
+                "CodeURL": "https://github.com/ReproNim/mriqc-nidm_bidsapp"
             }
         ],
         "HowToAcknowledge": (
