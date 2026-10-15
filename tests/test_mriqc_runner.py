@@ -541,6 +541,111 @@ class TestMRIQCWrapperOutputs:
 
         assert len(outputs) == 0
 
+    def test_find_mriqc_outputs_subject_centric_layout(
+        self, test_dirs, mock_mriqc_version
+    ):
+        """run.py passes <out>/sub-01/mriqc; MRIQC writes sub-01/anat under it."""
+        wrapper = MRIQCWrapper(
+            bids_dir=test_dirs["bids_dir"],
+            output_dir=test_dirs["output_dir"],
+        )
+
+        search_dir = test_dirs["output_dir"] / "sub-01" / "mriqc"
+        output_file = search_dir / "sub-01" / "anat" / "sub-01_T1w.json"
+        output_file.parent.mkdir(parents=True)
+        output_file.write_text("{}")
+
+        outputs = wrapper.find_mriqc_outputs(subject_id="01", search_dir=search_dir)
+
+        assert outputs == [output_file]
+
+    def test_find_mriqc_outputs_subject_centric_layout_with_session(
+        self, test_dirs, mock_mriqc_version
+    ):
+        """Session runs nest the same layout under <out>/sub-01/ses-01/mriqc."""
+        wrapper = MRIQCWrapper(
+            bids_dir=test_dirs["bids_dir"],
+            output_dir=test_dirs["output_dir"],
+        )
+
+        search_dir = test_dirs["output_dir"] / "sub-01" / "ses-01" / "mriqc"
+        output_file = (
+            search_dir / "sub-01" / "ses-01" / "anat" / "sub-01_ses-01_T1w.json"
+        )
+        output_file.parent.mkdir(parents=True)
+        output_file.write_text("{}")
+
+        outputs = wrapper.find_mriqc_outputs(
+            subject_id="01", session_id="01", search_dir=search_dir
+        )
+
+        assert outputs == [output_file]
+
+    def test_find_mriqc_outputs_search_dir_path_contains_sub(
+        self, test_dirs, mock_mriqc_version
+    ):
+        """A 'sub-' elsewhere in the path must not stop sub-<id> being appended."""
+        wrapper = MRIQCWrapper(
+            bids_dir=test_dirs["bids_dir"],
+            output_dir=test_dirs["output_dir"],
+        )
+
+        search_dir = test_dirs["output_dir"] / "sub-study" / "mriqc"
+        output_file = search_dir / "sub-01" / "anat" / "sub-01_T1w.json"
+        output_file.parent.mkdir(parents=True)
+        output_file.write_text("{}")
+
+        outputs = wrapper.find_mriqc_outputs(subject_id="01", search_dir=search_dir)
+
+        assert outputs == [output_file]
+
+
+class TestMRIQCWrapperSubjectCentricRun:
+    """process_participant with the per-subject output dir that run.py passes."""
+
+    def test_success_is_not_reported_as_failure(self, test_dirs, mock_mriqc_version):
+        """MRIQC exiting 0 with its JSONs in place is a success."""
+        wrapper = MRIQCWrapper(
+            bids_dir=test_dirs["bids_dir"],
+            output_dir=test_dirs["output_dir"],
+        )
+        subject_output_dir = test_dirs["output_dir"] / "sub-01" / "mriqc"
+
+        def fake_mriqc(*args, **kwargs):
+            output_file = subject_output_dir / "sub-01" / "anat" / "sub-01_T1w.json"
+            output_file.parent.mkdir(parents=True)
+            output_file.write_text("{}")
+            return Mock(returncode=0, stdout="Success", stderr="")
+
+        with patch("src.mriqc.mriqc_runner.subprocess.run", side_effect=fake_mriqc):
+            result = wrapper.process_participant(
+                subject_id="01", subject_output_dir=subject_output_dir
+            )
+
+        assert result is True
+        assert wrapper.results["success"] == ["sub-01"]
+        assert wrapper.results["failure"] == []
+
+    def test_skip_existing_finds_previous_outputs(self, test_dirs, mock_mriqc_version):
+        """Outputs from an earlier run are found, so MRIQC is not run again."""
+        wrapper = MRIQCWrapper(
+            bids_dir=test_dirs["bids_dir"],
+            output_dir=test_dirs["output_dir"],
+        )
+        subject_output_dir = test_dirs["output_dir"] / "sub-01" / "mriqc"
+        output_file = subject_output_dir / "sub-01" / "anat" / "sub-01_T1w.json"
+        output_file.parent.mkdir(parents=True)
+        output_file.write_text("{}")
+
+        with patch("src.mriqc.mriqc_runner.subprocess.run") as mock_run:
+            result = wrapper.process_participant(
+                subject_id="01", subject_output_dir=subject_output_dir
+            )
+
+        assert result is True
+        assert wrapper.results["skipped"] == ["sub-01"]
+        mock_run.assert_not_called()
+
 
 class TestMRIQCWrapperSummary:
     """Test result tracking and summary functionality."""

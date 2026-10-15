@@ -427,16 +427,12 @@ class MRIQCWrapper:
         # Use provided search_dir or default to mriqc_dir
         base_dir = search_dir if search_dir else self.mriqc_dir
 
-        # Search in MRIQC output directory
-        # Note: In subject-centric mode, search_dir is already
-        # subject-specific (e.g., sub-01/mriqc/)
-        # In legacy mode, we need to append sub-01
-        if "sub-" not in str(base_dir):
-            subject_dir = base_dir / f"sub-{subject_id}"
-        else:
-            subject_dir = base_dir
-
-        if session_id and "ses-" not in str(subject_dir):
+        # base_dir is always an MRIQC output root, which lays results out as
+        # sub-XX/[ses-YY/]<datatype>/. In subject-centric mode the root is
+        # itself under sub-XX/ (e.g. <out>/sub-01/mriqc), so the subject level
+        # is appended unconditionally rather than inferred from the path.
+        subject_dir = base_dir / f"sub-{subject_id}"
+        if session_id:
             subject_dir = subject_dir / f"ses-{session_id}"
 
         if not subject_dir.exists():
