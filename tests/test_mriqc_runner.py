@@ -599,6 +599,47 @@ class TestMRIQCWrapperOutputs:
 
         assert outputs == [output_file]
 
+    def test_find_mriqc_outputs_multi_session_without_session_id(
+        self, test_dirs, mock_mriqc_version
+    ):
+        """With no --session-label, MRIQC still writes sub-01/ses-*/anat."""
+        wrapper = MRIQCWrapper(
+            bids_dir=test_dirs["bids_dir"],
+            output_dir=test_dirs["output_dir"],
+        )
+
+        search_dir = test_dirs["output_dir"] / "sub-01" / "mriqc"
+        expected = []
+        for ses in ("a", "b"):
+            f = search_dir / "sub-01" / f"ses-{ses}" / "anat" / f"sub-01_ses-{ses}_T1w.json"
+            f.parent.mkdir(parents=True)
+            f.write_text("{}")
+            expected.append(f)
+
+        outputs = wrapper.find_mriqc_outputs(subject_id="01", search_dir=search_dir)
+
+        assert outputs == expected
+
+    def test_find_mriqc_outputs_ignores_timeseries_sidecars(
+        self, test_dirs, mock_mriqc_version
+    ):
+        """*_timeseries.json are confounds sidecars, not IQMs (as in run.py)."""
+        wrapper = MRIQCWrapper(
+            bids_dir=test_dirs["bids_dir"],
+            output_dir=test_dirs["output_dir"],
+        )
+
+        search_dir = test_dirs["output_dir"] / "sub-01" / "mriqc"
+        func_dir = search_dir / "sub-01" / "func"
+        func_dir.mkdir(parents=True)
+        iqm = func_dir / "sub-01_task-rest_bold.json"
+        iqm.write_text("{}")
+        (func_dir / "sub-01_task-rest_timeseries.json").write_text("{}")
+
+        outputs = wrapper.find_mriqc_outputs(subject_id="01", search_dir=search_dir)
+
+        assert outputs == [iqm]
+
 
 class TestMRIQCWrapperSubjectCentricRun:
     """process_participant with the per-subject output dir that run.py passes."""

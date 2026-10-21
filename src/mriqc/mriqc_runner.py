@@ -23,6 +23,12 @@ from ..utils import BIDS_VERSION
 logger = logging.getLogger("mriqc-nidm.wrapper")
 
 
+def is_iqm_json(path: Path) -> bool:
+    """True for an MRIQC IQM JSON, False for the *_timeseries.json confounds
+    sidecars MRIQC writes next to them (metadata, not IQM values)."""
+    return path.suffix == ".json" and not path.name.endswith("_timeseries.json")
+
+
 class MRIQCWrapper:
     """Wrapper for MRIQC quality control tool."""
 
@@ -273,7 +279,10 @@ class MRIQCWrapper:
                     search_dir=output_dir
                 )
                 if existing_outputs:
-                    logger.info(f"{participant_id} already processed. Skipping...")
+                    logger.info(
+                        f"{participant_id} already processed "
+                        f"({', '.join(f.name for f in existing_outputs)}). Skipping..."
+                    )
                     self.results["skipped"].append(participant_id)
                     return True
 
@@ -438,14 +447,24 @@ class MRIQCWrapper:
         if not subject_dir.exists():
             return outputs
 
-        # Look in MRIQC output directories
-        for datatype in self.MRIQC_DATATYPES:
-            datatype_dir = subject_dir / datatype
-            if not datatype_dir.exists():
-                continue
+        # Without a session, a multi-session dataset still has its results one
+        # level down, under sub-XX/ses-*/<datatype>/.
+        level_dirs = [subject_dir]
+        if not session_id:
+            level_dirs += sorted(subject_dir.glob("ses-*"))
 
+        datatype_dirs = [
+            level_dir / datatype
+            for level_dir in level_dirs
+            for datatype in self.MRIQC_DATATYPES
+            if (level_dir / datatype).exists()
+        ]
+
+        for datatype_dir in datatype_dirs:
             # Find JSON files matching pattern
             for json_file in datatype_dir.glob(f"{pattern}*.json"):
+                if not is_iqm_json(json_file):
+                    continue
                 if modality:
                     # BIDS suffix is the modality (last part before extension)
                     # e.g., "sub-01_T1w.json" -> suffix is "T1w"
