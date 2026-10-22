@@ -38,7 +38,11 @@ from .nidm_converter import (
 )
 from .nidm_converter.csv_to_nidm import check_csv2nidm_available
 from .nidm_converter.json_to_csv import combine_iqm_csvs, extract_session_label
-from .nidm_converter.nidm_merge import check_iqm_records, merge_iqms_into_nidm
+from .nidm_converter.nidm_merge import (
+    check_iqm_records,
+    fix_csv2nidm_types,
+    merge_iqms_into_nidm,
+)
 from .validators import validate_bids_directory, validate_output_directory
 from .nidm_converter.data import get_mriqc_dictionary
 
@@ -81,8 +85,9 @@ def _write_iqm_nidm(
     a graph csv2nidm built itself; when the target came from bidsmri2nidm,
     which records run and task only for functional images, T1w rows are
     dropped or linked to a BOLD acquisition. So csv2nidm writes the IQM
-    records into a new graph, and that graph is either used as is or
-    attached to the input NIDM with each record linked to its own image.
+    records into a new graph. After fix_csv2nidm_types, that graph is either
+    used as the subject's nidm.ttl or attached to the input NIDM with each
+    record linked to its own image.
 
     source_nidm is the input NIDM as found in the NIDM input directory;
     augmentation_target is the copy of it being written. Errors name the
@@ -103,6 +108,9 @@ def _write_iqm_nidm(
         logger=logger,
     ):
         raise RuntimeError(f"Failed to convert {iqm_csv.name} to NIDM")
+    # Before either branch, so the output carries the fix with or without an
+    # input NIDM.
+    fix_csv2nidm_types(iqm_ttl)
 
     if augmentation_target:
         merge_iqms_into_nidm(

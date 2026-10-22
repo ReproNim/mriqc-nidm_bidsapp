@@ -70,6 +70,46 @@ def _iqm_records(graph: Graph) -> Dict[URIRef, str]:
     return records
 
 
+def fix_csv2nidm_types(ttl: Path) -> int:
+    """
+    Type csv2nidm's IQM records and software agent with rdf:type, in place.
+
+    PyNIDM's GetDerivativesDataForSubject only follows derivative activities
+    whose agent has rdf:type prov:SoftwareAgent. csv2nidm (PyNIDM 4.5.0, and
+    upstream at the time of writing) never gives the MRIQC agent that type
+    (only its own export-provenance agents get it): with -out it
+    gives the MRIQC agent and the IQM DerivativeCollection entities their
+    NIDM types through rdfs:type, a predicate neither RDF nor RDFS defines,
+    and with -nidm it types the agent rdf:type nidm:SoftwareAgent only.
+    Either way the query returns no MRIQC data. Every rdfs:type triple
+    becomes rdf:type, and each nidm:SoftwareAgent also gets
+    prov:SoftwareAgent. A graph whose agents already have prov:SoftwareAgent
+    and that has no rdfs:type is not rewritten.
+
+    Args:
+        ttl: Turtle file written by csv2nidm; rewritten when anything changes
+
+    Returns:
+        Number of triples added
+    """
+    graph = Graph()
+    graph.parse(ttl, format="turtle")
+    before = len(graph)
+    added = 0
+    for s, o in list(graph.subject_objects(RDFS_TYPE)):
+        graph.remove((s, RDFS_TYPE, o))
+        if (s, RDF.type, o) not in graph:
+            graph.add((s, RDF.type, o))
+            added += 1
+    for agent in list(graph.subjects(RDF.type, NIDM.SoftwareAgent)):
+        if (agent, RDF.type, PROV.SoftwareAgent) not in graph:
+            graph.add((agent, RDF.type, PROV.SoftwareAgent))
+            added += 1
+    if added or len(graph) != before:
+        graph.serialize(destination=str(ttl), format="turtle")
+    return added
+
+
 def _participant(graph: Graph, activity) -> Optional[URIRef]:
     """Agent associated with an activity in the sio:Subject role."""
     for assoc in graph.objects(activity, PROV.qualifiedAssociation):
@@ -228,5 +268,6 @@ def check_iqm_records(nidm_ttl: Path, json_files: Iterable[Path]) -> List[str]:
 __all__ = [
     "IQMLinkError",
     "check_iqm_records",
+    "fix_csv2nidm_types",
     "merge_iqms_into_nidm",
 ]
