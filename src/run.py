@@ -85,8 +85,9 @@ def _write_iqm_nidm(
     a graph csv2nidm built itself; when the target came from bidsmri2nidm,
     which records run and task only for functional images, T1w rows are
     dropped or linked to a BOLD acquisition. So csv2nidm writes the IQM
-    records into a new graph, and that graph is either used as is or
-    attached to the input NIDM with each record linked to its own image.
+    records into a new graph. After fix_csv2nidm_types, that graph is either
+    used as the subject's nidm.ttl or attached to the input NIDM with each
+    record linked to its own image.
 
     source_nidm is the input NIDM as found in the NIDM input directory;
     augmentation_target is the copy of it being written. Errors name the

@@ -181,12 +181,14 @@ an acquisition by session/task/run, and bidsmri2nidm records run and task only
 for functional images, so in that mode T1w IQMs were either dropped or linked
 to a BOLD acquisition with the same run number, with exit status 0.
 
-csv2nidm (PyNIDM 4.5.0) types the IQM records and the MRIQC software agent
-with `rdfs:type`, which is not an RDF term, so PyNIDM's own
-`GetDerivativesDataForSubject` found no MRIQC data in the result. The app
-rewrites those triples as `rdf:type` and adds `prov:SoftwareAgent` to the
-agent before writing `nidm.ttl`. Graphs from a csv2nidm that already writes
-`rdf:type` pass through unchanged.
+PyNIDM's own `GetDerivativesDataForSubject` only finds derivatives whose
+software agent has `rdf:type prov:SoftwareAgent`. csv2nidm (PyNIDM 4.5.0) never
+gives the MRIQC agent that type, so the query found no MRIQC data in the result.
+csv2nidm also gives the IQM records and the agent their NIDM types through
+`rdfs:type`, a predicate neither RDF nor RDFS defines. Before writing
+`nidm.ttl`, the app rewrites those triples as `rdf:type` and adds
+`prov:SoftwareAgent` to the agent. Output from a csv2nidm that already types the
+agent `prov:SoftwareAgent` (incf-nidash/PyNIDM#457) is not rewritten.
 
 A job fails (non-zero exit) when an IQM record matches no acquisition or
 several, or when `nidm.ttl` does not end up with exactly one IQM record per

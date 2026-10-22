@@ -72,16 +72,19 @@ def _iqm_records(graph: Graph) -> Dict[URIRef, str]:
 
 def fix_csv2nidm_types(ttl: Path) -> int:
     """
-    Rewrite the rdfs:type triples csv2nidm writes as rdf:type, in place.
+    Type csv2nidm's IQM records and software agent with rdf:type, in place.
 
-    csv2nidm (PyNIDM 4.5.0, and upstream at the time of writing) types the
-    IQM DerivativeCollection entities and the MRIQC software agent with
-    rdfs:type, which is not an RDF term, so neither carries a real type. The
-    agent is also typed nidm:SoftwareAgent but not prov:SoftwareAgent, which
-    is what PyNIDM's GetDerivativesDataForSubject looks for; without it the
-    query returns no MRIQC data for the subject. Every rdfs:type triple
+    PyNIDM's GetDerivativesDataForSubject only follows derivative activities
+    whose agent has rdf:type prov:SoftwareAgent. csv2nidm (PyNIDM 4.5.0, and
+    upstream at the time of writing) never gives the MRIQC agent that type
+    (only its own export-provenance agents get it): with -out it
+    gives the MRIQC agent and the IQM DerivativeCollection entities their
+    NIDM types through rdfs:type, a predicate neither RDF nor RDFS defines,
+    and with -nidm it types the agent rdf:type nidm:SoftwareAgent only.
+    Either way the query returns no MRIQC data. Every rdfs:type triple
     becomes rdf:type, and each nidm:SoftwareAgent also gets
-    prov:SoftwareAgent. A graph that is already correct is left unchanged.
+    prov:SoftwareAgent. A graph whose agents already have prov:SoftwareAgent
+    and that has no rdfs:type is not rewritten.
 
     Args:
         ttl: Turtle file written by csv2nidm; rewritten when anything changes

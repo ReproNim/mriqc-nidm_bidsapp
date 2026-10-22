@@ -241,14 +241,32 @@ niiri:record a prov:Entity ; rdfs:type nidm:DerivativeCollection .
             PROV.Entity, NIDM.DerivativeCollection,
         }
 
-    def test_correct_graph_is_left_alone(self, tmp_path):
-        """Once csv2nidm writes rdf:type itself, this is a no-op"""
-        ttl = _write(tmp_path / "iqms.ttl", self.CSV2NIDM_SHAPE)
-        fix_csv2nidm_types(ttl)
-        fixed = ttl.read_text()
+    def test_agent_typed_only_nidm_software_agent_gets_prov(self, tmp_path):
+        """The csv2nidm -nidm shape: rdf:type, but no prov:SoftwareAgent"""
+        ttl = _write(tmp_path / "iqms.ttl", self.CSV2NIDM_SHAPE.replace(
+            "rdfs:type", "a"))
+
+        assert fix_csv2nidm_types(ttl) == 1
+        g = rdflib.Graph()
+        g.parse(ttl, format="turtle")
+        assert (NIIRI.agent, RDF.type, PROV.SoftwareAgent) in g
+
+    def test_correct_graph_is_not_rewritten(self, tmp_path):
+        """Output shaped like PyNIDM#457's csv2nidm is left byte for byte"""
+        # A layout rdflib would not write, so a rewrite would show.
+        text = (
+            "@prefix nidm: <http://purl.org/nidash/nidm#> .\n"
+            "@prefix niiri: <http://iri.nidash.org/> .\n"
+            "@prefix prov: <http://www.w3.org/ns/prov#> .\n"
+            "niiri:agent a nidm:SoftwareAgent, prov:Agent, prov:SoftwareAgent .\n"
+            "niiri:record a nidm:DerivativeCollection, prov:Entity .\n"
+        )
+        ttl = _write(tmp_path / "iqms.ttl", text)
+        mtime = ttl.stat().st_mtime_ns
 
         assert fix_csv2nidm_types(ttl) == 0
-        assert ttl.read_text() == fixed
+        assert ttl.read_text() == text
+        assert ttl.stat().st_mtime_ns == mtime
 
 
 # End to end through process_subject with the real csv2nidm.
@@ -498,8 +516,8 @@ def test_pynidm_derivative_query_finds_every_iqm_record(
     MRIQC agent with rdfs:type nidm:SoftwareAgent instead, which the query
     never sees, so it found no MRIQC data at all.
     """
-    query = pytest.importorskip("nidm.experiment.Query")
     import nidm.experiment.CDE
+    from nidm.experiment import Query as query
 
     # IQM data elements are defined in the graph itself; the CDE fallback
     # would download the ANTs/FreeSurfer/FSL vocabularies.
@@ -523,4 +541,6 @@ def test_pynidm_derivative_query_finds_every_iqm_record(
         collections.update(query.GetDerivativesDataForSubject((g,), None, subject))
 
     assert len(collections) == len(SES1_STEMS)
-    assert all(c["values"] for c in collections.values())
+    for collection in collections.values():
+        assert collection["StatCollectionType"] == "DerivativeCollection"
+        assert collection["values"]
