@@ -317,8 +317,12 @@ class MRIQCWrapper:
                 search_dir=output_dir
             )
             if not outputs:
-                logger.warning(
-                    f"MRIQC completed but no outputs found for {participant_id}"
+                searched = output_dir / f"sub-{subject_id}"
+                if session_id:
+                    searched = searched / f"ses-{session_id}"
+                logger.error(
+                    f"MRIQC exited 0 but no IQM JSON was found for "
+                    f"{participant_id} under {searched}"
                 )
                 self.results["failure"].append(participant_id)
                 return False

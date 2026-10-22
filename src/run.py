@@ -543,6 +543,9 @@ MRIQC Arguments:
 
     logger.info(f"Processing {len(subjects)} subject(s): {', '.join(subjects)}")
 
+    # Subjects whose MRIQC run failed; they are not converted to NIDM.
+    mriqc_failed = set()
+
     # Run MRIQC if not skipped
     if not skip_mriqc:
         logger.info("Running MRIQC quality control...")
@@ -566,7 +569,7 @@ MRIQC Arguments:
                 _, mriqc_dir = _dirs_for(subject_id)
                 logger.info(f"Running MRIQC for sub-{subject_id} → {mriqc_dir}")
                 try:
-                    mriqc_wrapper.process_participant(
+                    mriqc_ok = mriqc_wrapper.process_participant(
                         subject_id=subject_id,
                         subject_output_dir=mriqc_dir,
                         session_id=session_id,
@@ -580,7 +583,13 @@ MRIQC Arguments:
                     )
                 except Exception as e:
                     logger.error(f"MRIQC failed for sub-{subject_id}: {e}")
-                    continue
+                    mriqc_ok = False
+                # False means MRIQC exited non-zero or wrote no IQM JSON. Any
+                # JSONs it did write are a partial set (T1w written, bold
+                # crashed), so the subject fails instead of getting a NIDM
+                # file that silently lacks the rest.
+                if not mriqc_ok:
+                    mriqc_failed.add(subject_id)
 
             logger.info("MRIQC execution completed")
 
@@ -591,6 +600,12 @@ MRIQC Arguments:
     # Process each subject through NIDM conversion
     success_count = 0
     for subject_id in subjects:
+        if subject_id in mriqc_failed:
+            logger.error(
+                f"MRIQC failed or produced no IQM JSON for sub-{subject_id} "
+                "(see above); not converting its outputs to NIDM"
+            )
+            continue
         subject_dir, mriqc_dir = _dirs_for(subject_id)
         if process_subject(
             subject_id=subject_id,
