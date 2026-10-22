@@ -190,7 +190,8 @@ to NIDM, even if MRIQC wrote some IQM JSONs before failing.
 This catches MRIQC failures, not every missing IQM:
 - MRIQC itself skips runs it cannot process (BOLD runs under 5 volumes, DWI
   under 7, anatomical images with more than one volume), logs a warning and
-  exits 0, so those runs have no IQMs and the job still succeeds.
+  exits 0, so those runs have no IQMs and the job still succeeds. If every
+  run of a modality is dropped, MRIQC 25 crashes instead, and the job fails.
 - With `--skip-mriqc` or `--mriqc-output-dir` there is no MRIQC exit status to
   check, and the app converts the IQM JSONs it finds.
 - A re-run into an existing output directory also reads IQM JSONs left by an
