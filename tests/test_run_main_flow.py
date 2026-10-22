@@ -7,11 +7,14 @@ as a failed subject, so "partially succeeded" must not look like success, and a
 misconfigured run must fail before it consumes a scheduler slot.
 """
 
+import subprocess
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from src.mriqc.mriqc_runner import MRIQCWrapper
 from src.run import main
 
 
@@ -225,7 +228,7 @@ class TestMriqcFailureHandling:
         self, tmp_path, monkeypatch
     ):
         # One subject's MRIQC blowing up must not stop the others; the loop
-        # logs and continues.
+        # logs and continues. The failed subject still fails the run.
         bids_dir = _bids(tmp_path / "bids", subjects=("01", "02"))
         monkeypatch.setattr(
             sys, "argv",
@@ -234,7 +237,45 @@ class TestMriqcFailureHandling:
         with patch("src.run.MRIQCWrapper") as wrapper, \
                 patch("src.run.process_subject", return_value=True) as proc:
             wrapper.return_value.process_participant.side_effect = [
-                RuntimeError("sub-01 failed"), None
+                RuntimeError("sub-01 failed"), True
             ]
-            assert main() == 0
-        assert proc.call_count == 2
+            assert main() == 1
+        assert [c.kwargs["subject_id"] for c in proc.call_args_list] == ["02"]
+
+    def test_mriqc_reporting_failure_fails_the_subject(self, dataset, monkeypatch):
+        # process_participant returns False when MRIQC exits non-zero or
+        # writes no IQM JSON. Whatever MRIQC did write is not converted.
+        bids_dir, out_dir = dataset
+        monkeypatch.setattr(
+            sys, "argv", _argv(bids_dir, out_dir, "--skip-nidm-conversion")
+        )
+        with patch("src.run.MRIQCWrapper") as wrapper, \
+                patch("src.run.process_subject", return_value=True) as proc:
+            wrapper.return_value.process_participant.return_value = False
+            assert main() == 1
+        proc.assert_not_called()
+
+    def test_partial_mriqc_output_with_nonzero_exit_fails(
+        self, dataset, monkeypatch
+    ):
+        # MRIQC writes the T1w IQM JSON and then exits non-zero (the bold
+        # workflow crashed). The T1w JSON alone must not make the job pass:
+        # BABS would record the subject as complete with half its IQMs.
+        bids_dir, out_dir = dataset
+        monkeypatch.setattr(
+            sys, "argv", _argv(bids_dir, out_dir, "--skip-nidm-conversion")
+        )
+
+        def mriqc_writes_t1w_then_fails(cmd, **kwargs):
+            anat = Path(cmd[2]) / "sub-01" / "anat"
+            anat.mkdir(parents=True, exist_ok=True)
+            (anat / "sub-01_T1w.json").write_text('{"cjv": 0.4}')
+            return subprocess.CompletedProcess(cmd, 1, "", "bold workflow crashed")
+
+        with patch.object(MRIQCWrapper, "_get_mriqc_version", return_value="24.0.2"), \
+                patch("src.mriqc.mriqc_runner.subprocess.run",
+                      side_effect=mriqc_writes_t1w_then_fails):
+            assert main() == 1
+        # The JSON is there, so the exit code is what decides it.
+        assert (out_dir / "sub-01" / "mriqc" / "sub-01" / "anat"
+                / "sub-01_T1w.json").exists()
