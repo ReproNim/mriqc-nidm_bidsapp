@@ -22,6 +22,7 @@ from src.nidm_converter.nidm_merge import (
     RDFS_TYPE,
     IQMLinkError,
     check_iqm_records,
+    fix_csv2nidm_types,
     merge_iqms_into_nidm,
 )
 from src.run import main, process_subject
@@ -212,6 +213,42 @@ class TestCheckIqmRecords:
             tmp_path / "n.ttl", iqm_nidm_ttl([str(jsons[0]), "/old/a_T1w.json"])
         )
         assert check_iqm_records(ttl, jsons) == []
+
+
+class TestFixCsv2nidmTypes:
+    """csv2nidm's rdfs:type triples become rdf:type (#26)."""
+
+    CSV2NIDM_SHAPE = """\
+@prefix nidm: <http://purl.org/nidash/nidm#> .
+@prefix niiri: <http://iri.nidash.org/> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+niiri:agent a prov:Agent ; rdfs:type nidm:SoftwareAgent .
+niiri:record a prov:Entity ; rdfs:type nidm:DerivativeCollection .
+"""
+
+    def test_rdfs_type_becomes_rdf_type(self, tmp_path):
+        ttl = _write(tmp_path / "iqms.ttl", self.CSV2NIDM_SHAPE)
+        fix_csv2nidm_types(ttl)
+
+        g = rdflib.Graph()
+        g.parse(ttl, format="turtle")
+        assert not list(g.triples((None, RDFS_TYPE, None)))
+        assert set(g.objects(NIIRI.agent, RDF.type)) == {
+            PROV.Agent, NIDM.SoftwareAgent, PROV.SoftwareAgent,
+        }
+        assert set(g.objects(NIIRI.record, RDF.type)) == {
+            PROV.Entity, NIDM.DerivativeCollection,
+        }
+
+    def test_correct_graph_is_left_alone(self, tmp_path):
+        """Once csv2nidm writes rdf:type itself, this is a no-op"""
+        ttl = _write(tmp_path / "iqms.ttl", self.CSV2NIDM_SHAPE)
+        fix_csv2nidm_types(ttl)
+        fixed = ttl.read_text()
+
+        assert fix_csv2nidm_types(ttl) == 0
+        assert ttl.read_text() == fixed
 
 
 # End to end through process_subject with the real csv2nidm.
@@ -446,3 +483,44 @@ def test_jsonld_input_nidm_fails_without_writing_nidm(tmp_path, logger, caplog):
     assert ok is False
     assert str(found) in caplog.text
     assert not (subject_dir / "nidm.ttl").exists()
+
+
+# PyNIDM's own query API must find the IQM records (#26).
+@needs_csv2nidm
+@pytest.mark.parametrize("with_input", [False, True], ids=["no_input", "input_nidm"])
+def test_pynidm_derivative_query_finds_every_iqm_record(
+    tmp_path, logger, monkeypatch, with_input
+):
+    """GetDerivativesDataForSubject returns one collection per IQM JSON.
+
+    The query only follows derivative activities associated with an agent
+    that has rdf:type prov:SoftwareAgent. csv2nidm (PyNIDM 4.5.0) types the
+    MRIQC agent with rdfs:type nidm:SoftwareAgent instead, which the query
+    never sees, so it found no MRIQC data at all.
+    """
+    query = pytest.importorskip("nidm.experiment.Query")
+    import nidm.experiment.CDE
+
+    # IQM data elements are defined in the graph itself; the CDE fallback
+    # would download the ANTs/FreeSurfer/FSL vocabularies.
+    monkeypatch.setattr(nidm.experiment.CDE, "getCDEs", lambda *a, **k: rdflib.Graph())
+
+    nidm_dir = tmp_path / "nidm"
+    if with_input:
+        _write(nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl", input_nidm_ttl())
+    ok, ttl = _run(tmp_path, SES1_STEMS, nidm_dir, logger)
+    assert ok is True
+
+    g = rdflib.Graph()
+    g.parse(ttl, format="turtle")
+    subjects = {
+        g.value(assoc, PROV.agent)
+        for assoc in g.subjects(PROV.hadRole, SIO.Subject)
+        if (None, PROV.qualifiedAssociation, assoc) in g
+    }
+    collections = {}
+    for subject in subjects:
+        collections.update(query.GetDerivativesDataForSubject((g,), None, subject))
+
+    assert len(collections) == len(SES1_STEMS)
+    assert all(c["values"] for c in collections.values())
