@@ -183,7 +183,9 @@ to a BOLD acquisition with the same run number, with exit status 0.
 
 A job fails (non-zero exit) when an IQM record matches no acquisition or
 several, or when `nidm.ttl` does not end up with exactly one IQM record per
-IQM JSON.
+IQM JSON. It also fails when MRIQC exits non-zero or writes no IQM JSON for a
+subject. That subject is not converted to NIDM, even if MRIQC wrote some IQM
+JSONs before failing, so a partial set of IQMs is never delivered as complete.
 
 **Running under BABS:** pair this layout with `zip_foldernames: {${subid}: "<version>"}`
 so the zip's top-level folder is `sub-{id}` and results unzip straight into
