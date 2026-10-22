@@ -81,6 +81,9 @@ jobs:
         rev=$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' mriqc-nidm:test)
         echo "org.opencontainers.image.revision=$rev"
         test "$rev" = "${{ github.event.pull_request.head.sha || github.sha }}"
+        ver=$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.version" }}' mriqc-nidm:test)
+        echo "org.opencontainers.image.version=$ver"
+        test "$ver" = "$(python3 -c 'import json; print(json.load(open("VERSION"))["mriqc-nidm"]["version"])')"
 
     - name: Smoke-test the entrypoint
       # Proves the image's ENTRYPOINT actually resolves and runs. Building alone
