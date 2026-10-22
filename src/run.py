@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from . import __version__
-from .mriqc.mriqc_runner import MRIQCWrapper
+from .mriqc.mriqc_runner import MRIQCWrapper, is_iqm_json
 from .utils import (
     normalize_label,
     parse_mriqc_args,
@@ -193,14 +193,12 @@ def process_subject(
         # This handles both session and non-session datasets:
         # - Non-session: sub-01/anat/*.json, sub-01/func/*.json
         # - Session: sub-01/ses-01/anat/*.json, sub-01/ses-01/func/*.json
-        # IMPORTANT: Filter out non-IQM files like *_timeseries.json which are
-        # confounds sidecar files containing metadata, not IQM values
+        # is_iqm_json drops the *_timeseries.json confounds sidecars; the
+        # wrapper's output finder uses the same predicate.
         # Sort for deterministic processing order
-        all_json_files = subject_mriqc_dir.rglob("*.json")
-        json_files = sorted([
-            f for f in all_json_files
-            if not f.name.endswith("_timeseries.json")
-        ])
+        json_files = sorted(
+            f for f in subject_mriqc_dir.rglob("*.json") if is_iqm_json(f)
+        )
 
         if not json_files:
             logger.warning(f"No MRIQC JSON files found for sub-{subject_id}")
@@ -572,6 +570,11 @@ MRIQC Arguments:
                         subject_id=subject_id,
                         subject_output_dir=mriqc_dir,
                         session_id=session_id,
+                        # Always run MRIQC. Skipping on existing JSONs would let
+                        # a re-run into a partly written output dir (T1w done,
+                        # bold crashed) build NIDM from the stale subset and
+                        # exit 0.
+                        skip_existing=False,
                         verbose_count=1 if args.verbose else 0,
                         **mriqc_kwargs,
                     )

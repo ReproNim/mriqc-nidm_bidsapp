@@ -74,6 +74,23 @@ class TestSessionLabel:
         ] == "baseline"
 
 
+class TestMRIQCRerun:
+    def test_mriqc_is_not_skipped_on_existing_outputs(self, dataset, monkeypatch):
+        # A partial earlier run (T1w JSON written, bold crashed) must not make
+        # a re-run skip MRIQC and build NIDM from the stale subset.
+        bids_dir, out_dir = dataset
+        monkeypatch.setattr(
+            sys, "argv", _argv(bids_dir, out_dir, "--skip-nidm-conversion"),
+        )
+        with patch("src.run.MRIQCWrapper") as wrapper, \
+                patch("src.run.process_subject", return_value=True):
+            assert main() == 0
+
+        assert wrapper.return_value.process_participant.call_args.kwargs[
+            "skip_existing"
+        ] is False
+
+
 class TestSubjectSelection:
     @pytest.mark.parametrize("given", ["01", "sub-01"])
     def test_participant_label_accepts_both_prefixed_and_bare(
