@@ -11,6 +11,7 @@ These tests verify the MRIQC runner functionality including:
 """
 
 import json
+import logging
 import pytest
 from unittest.mock import Mock, patch
 
@@ -686,6 +687,37 @@ class TestMRIQCWrapperSubjectCentricRun:
         assert result is True
         assert wrapper.results["skipped"] == ["sub-01"]
         mock_run.assert_not_called()
+
+    def test_zero_exit_without_iqm_json_is_an_error_naming_the_path(
+        self, test_dirs, mock_mriqc_version, caplog
+    ):
+        """No IQM JSON after exit 0 fails the subject and says where it looked.
+
+        This is how the #27 finder bug showed up; the message must point at
+        the searched directory, not at an MRIQC crash.
+        """
+        wrapper = MRIQCWrapper(
+            bids_dir=test_dirs["bids_dir"],
+            output_dir=test_dirs["output_dir"],
+        )
+        subject_output_dir = test_dirs["output_dir"] / "sub-01" / "mriqc"
+
+        with patch(
+            "src.mriqc.mriqc_runner.subprocess.run",
+            return_value=Mock(returncode=0, stdout="", stderr=""),
+        ), caplog.at_level(logging.ERROR, logger="mriqc-nidm.wrapper"):
+            result = wrapper.process_participant(
+                subject_id="01", subject_output_dir=subject_output_dir,
+                session_id="a",
+            )
+
+        assert result is False
+        assert wrapper.results["failure"] == ["sub-01_ses-a"]
+        searched = str(subject_output_dir / "sub-01" / "ses-a")
+        assert any(
+            r.levelno == logging.ERROR and searched in r.getMessage()
+            for r in caplog.records
+        )
 
 
 class TestMRIQCWrapperSummary:

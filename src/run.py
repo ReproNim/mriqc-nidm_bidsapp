@@ -602,8 +602,8 @@ MRIQC Arguments:
     for subject_id in subjects:
         if subject_id in mriqc_failed:
             logger.error(
-                f"MRIQC did not complete for sub-{subject_id}; not converting "
-                "its outputs to NIDM"
+                f"MRIQC failed or produced no IQM JSON for sub-{subject_id} "
+                "(see above); not converting its outputs to NIDM"
             )
             continue
         subject_dir, mriqc_dir = _dirs_for(subject_id)

@@ -183,9 +183,18 @@ to a BOLD acquisition with the same run number, with exit status 0.
 
 A job fails (non-zero exit) when an IQM record matches no acquisition or
 several, or when `nidm.ttl` does not end up with exactly one IQM record per
-IQM JSON. It also fails when MRIQC exits non-zero or writes no IQM JSON for a
-subject. That subject is not converted to NIDM, even if MRIQC wrote some IQM
-JSONs before failing, so a partial set of IQMs is never delivered as complete.
+IQM JSON. When the app runs MRIQC itself, the job also fails when MRIQC exits
+non-zero or no IQM JSON is found for a subject. That subject is not converted
+to NIDM, even if MRIQC wrote some IQM JSONs before failing.
+
+This catches MRIQC failures, not every missing IQM:
+- MRIQC itself skips runs it cannot process (BOLD runs under 5 volumes, DWI
+  under 7, anatomical images with more than one volume), logs a warning and
+  exits 0, so those runs have no IQMs and the job still succeeds.
+- With `--skip-mriqc` or `--mriqc-output-dir` there is no MRIQC exit status to
+  check, and the app converts the IQM JSONs it finds.
+- A re-run into an existing output directory also reads IQM JSONs left by an
+  earlier run.
 
 **Running under BABS:** pair this layout with `zip_foldernames: {${subid}: "<version>"}`
 so the zip's top-level folder is `sub-{id}` and results unzip straight into
