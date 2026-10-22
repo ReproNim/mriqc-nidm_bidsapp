@@ -83,14 +83,14 @@ From: nipreps/mriqc:25.0.0rc0
     mriqc-nidm "$@"
 
 %help
-    MRIQC-NIDM BIDS App 0.1.1
+    MRIQC-NIDM BIDS App 0.1.2
 
     A BIDS Application that executes MRIQC (MRI Quality Control) on BIDS datasets
     and converts output to NIDM (Neuroimaging Data Model) format for improved
     interoperability.
 
     Version Information:
-    - MRIQC-NIDM: 0.1.1
+    - MRIQC-NIDM: 0.1.2
     - MRIQC: 25.0.0rc0
     - Base Image: nipreps/mriqc:25.0.0rc0
 
