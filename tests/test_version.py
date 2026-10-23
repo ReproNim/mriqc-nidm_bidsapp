@@ -1,9 +1,11 @@
-"""The version in VERSION, the one the app reports and the image's %help agree.
+"""The version in VERSION, the one the app reports, the image's %help and its
+version label agree.
 
 src.get_version() feeds dataset_description.json and the MRIQC provenance
 record; setup.py reads the same key for the package; the Singularity %help is
-what `apptainer run-help` shows. A release that bumps only some of these ships
-an image that disagrees with itself.
+what `apptainer run-help` shows; the version label (Singularity %post and
+Dockerfile LABEL) is what `apptainer inspect --labels` shows. A release that
+bumps only some of these ships an image that disagrees with itself.
 """
 import json
 import re
@@ -34,3 +36,28 @@ def test_missing_version_file_reports_unknown(monkeypatch, tmp_path):
     fake_init.write_text("")
     monkeypatch.setattr(src, "__file__", str(fake_init))
     assert src.get_version() == "unknown"
+
+
+def test_image_version_label_is_the_app_version():
+    """Both image recipes label the image with the app version.
+
+    The Singularity recipe writes the label in %post: without --force, a
+    %labels entry does not replace a label the base image already sets
+    (Apptainer keeps the base's org.opencontainers.image.version, e.g.
+    Ubuntu's 22.04, and only warns).
+    """
+    singularity = (ROOT / "Singularity").read_text()
+    labels = singularity.split("\n%labels\n", 1)[1].split("\n%", 1)[0]
+    assert "org.opencontainers.image.version" not in labels
+    # Only %post: the same line in another section would not label the image.
+    post_section = singularity.split("\n%post\n", 1)[1].split("\n%", 1)[0]
+    post = re.findall(
+        r'^\s+echo "org\.opencontainers\.image\.version (\S+)" '
+        r'>> "\$\{APPTAINER_LABELS:-\$SINGULARITY_LABELS\}"$',
+        post_section, re.MULTILINE,
+    )
+    assert post == [VERSION]
+    docker = re.findall(
+        r"org\.opencontainers\.image\.version=(\S+)", (ROOT / "Dockerfile").read_text()
+    )
+    assert docker == [VERSION]
