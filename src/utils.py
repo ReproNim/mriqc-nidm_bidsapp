@@ -92,6 +92,8 @@ def parse_mriqc_args(extra_args: List[str]) -> Dict[str, Any]:
         {'mem': '16G', 'nprocs': 12}
         >>> parse_mriqc_args(['--ica', '--no-sub'])
         {'ica': True, 'no_sub': True}
+        >>> parse_mriqc_args(['-m', 'T1w', 'bold', '--bids-filter-file=f.json'])
+        {'modalities': ['T1w', 'bold'], 'bids_filter_file': 'f.json'}
 
     Args:
         extra_args: List of command-line arguments not recognized by mriqc-nidm
@@ -99,31 +101,45 @@ def parse_mriqc_args(extra_args: List[str]) -> Dict[str, Any]:
     Returns:
         Dictionary of parsed arguments with underscored keys
     """
+    def _number(value: str) -> Any:
+        try:
+            return int(value)
+        except ValueError:
+            try:
+                return float(value)
+            except ValueError:
+                return value  # Keep as string
+
     mriqc_kwargs: Dict[str, Any] = {}
     i = 0
     while i < len(extra_args):
         arg = extra_args[i]
-        if arg.startswith("--"):
-            key = arg[2:].replace("-", "_")  # --omp-nthreads → omp_nthreads
-            # Check if next arg is a value or another flag
-            if i + 1 < len(extra_args) and not extra_args[i + 1].startswith("-"):
-                value: Any = extra_args[i + 1]
-                # Try to convert to int/float if possible
-                try:
-                    value = int(value)
-                except ValueError:
-                    try:
-                        value = float(value)
-                    except ValueError:
-                        pass  # Keep as string
-                mriqc_kwargs[key] = value
-                i += 2
-            else:
-                # Boolean flag
-                mriqc_kwargs[key] = True
-                i += 1
-        else:
+        # MRIQC's -m is its only short option that takes values; others
+        # (-w, -v) are not passed through.
+        if arg == "-m":
+            arg = "--modalities"
+        if not arg.startswith("--"):
             i += 1
+            continue
+        key, eq, inline = arg[2:].partition("=")
+        key = key.replace("-", "_")  # --omp-nthreads → omp_nthreads
+        if eq:
+            # --bids-filter-file=/x/f.json: the value is part of the flag.
+            mriqc_kwargs[key] = _number(inline)
+            i += 1
+            continue
+        # Every value up to the next flag: --modalities T1w bold takes both.
+        values = []
+        i += 1
+        while i < len(extra_args) and not extra_args[i].startswith("-"):
+            values.append(_number(extra_args[i]))
+            i += 1
+        if not values:
+            mriqc_kwargs[key] = True  # Boolean flag
+        elif len(values) == 1:
+            mriqc_kwargs[key] = values[0]
+        else:
+            mriqc_kwargs[key] = values
     return mriqc_kwargs
 
 

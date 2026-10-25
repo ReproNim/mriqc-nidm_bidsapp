@@ -51,10 +51,11 @@ def _mriqc_selects(bids_dir, subject, session, suffix, query):
     """What MRIQC 25 selects: niworkflows collect_data's query plus the filter."""
     layout = BIDSLayout(str(bids_dir), validate=False)
     base = {"datatype": "anat", "suffix": suffix, "part": ["mag", None]}
-    return sorted(Path(f).name for f in layout.get(
-        return_type="file", subject=subject, session=session or Query.OPTIONAL,
-        extension=[".nii", ".nii.gz"], **{**base, **query},
-    ))
+    get_kwargs = {"return_type": "file", "subject": subject,
+                  "session": session or Query.OPTIONAL,
+                  "extension": [".nii", ".nii.gz"]}
+    # The filter overrides both, as in collect_data.
+    return sorted(Path(f).name for f in layout.get(**{**get_kwargs, **base, **query}))
 
 
 @pytest.fixture
@@ -116,6 +117,55 @@ class TestGate:
         _anat(bids, "sub-01_ses-1_acq-hires_T1w.nii.gz", SLAB, ses="1")
         gate = gate_anat_inputs(bids, "01", None, 2.0)
         assert _mriqc_selects(bids, "01", None, "T1w", gate.filters["t1w"]) == [fine.name]
+
+    def test_without_a_session_sessions_named_alike_are_told_apart_by_session(
+        self, tmp_path
+    ):
+        # Only the session differs, so only a session filter separates them;
+        # MRIQC accepts one when it was not given --session-id.
+        bids = _bids(tmp_path / "bids")
+        fine = _anat(bids, "sub-01_ses-1_T1w.nii.gz", FINE, ses="1")
+        _anat(bids, "sub-01_ses-2_T1w.nii.gz", SLAB, ses="2")
+        gate = gate_anat_inputs(bids, "01", None, 2.0)
+        assert _mriqc_selects(bids, "01", None, "T1w", gate.filters["t1w"]) == [fine.name]
+
+    def test_unrequested_modalities_are_not_gated(self, ucla):
+        bids, _, _ = ucla
+        assert gate_anat_inputs(bids, "01", "1", 2.0, modalities=["bold"]) == ({}, [], [])
+
+    def test_directory_names_above_the_dataset_do_not_become_entities(self, tmp_path):
+        # The derivatives patterns (res-, desc-, ...) are not anchored to the
+        # file name; MRIQC's layout does not use them and rejects the entity.
+        bids = _bids(tmp_path / "features-x" / "res-2" / "bids")
+        _anat(bids, "sub-01_ses-1_run-1_T1w.nii.gz", FINE)
+        _anat(bids, "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz", SLAB)
+        query = gate_anat_inputs(bids, "01", "1", 2.0).filters["t1w"]
+        assert set(query) == {"acquisition", "run"}
+
+    @pytest.mark.parametrize("user_run", [1, "1", "01", [1]])
+    def test_user_filter_narrows_and_is_read_as_pybids_reads_it(self, tmp_path, user_run):
+        # "1", "01" and 1 all mean run 1 to pybids; comparing values by hand
+        # once turned them into an empty list, which pybids reads as "any".
+        bids = _bids(tmp_path / "bids")
+        fine = _anat(bids, "sub-01_ses-1_run-01_T1w.nii.gz", FINE)
+        _anat(bids, "sub-01_ses-1_run-02_T1w.nii.gz", FINE)
+        _anat(bids, "sub-01_ses-1_acq-hires_run-01_T1w.nii.gz", SLAB)
+        gate = gate_anat_inputs(bids, "01", "1", 2.0, user_filters={"t1w": {"run": user_run}})
+        assert _mriqc_selects(bids, "01", "1", "T1w", gate.filters["t1w"]) == [fine.name]
+
+    def test_user_filter_choosing_only_the_slab_drops_the_modality(self, ucla):
+        bids, _, slab = ucla
+        gate = gate_anat_inputs(
+            bids, "01", "1", 2.0, user_filters={"t1w": {"acquisition": "hires"}})
+        assert gate.dropped == ["T1w"]
+        assert gate.filters == {}
+        assert [p for p, _ in gate.too_coarse] == [slab]
+
+    def test_user_filter_excluding_the_slab_needs_no_gate(self, ucla):
+        bids, _, _ = ucla
+        gate = gate_anat_inputs(
+            bids, "01", "1", 2.0, user_filters={"t1w": {"acquisition": None}})
+        assert gate == ({}, [], [])
 
     def test_phase_images_are_not_gated(self, tmp_path):
         # MRIQC never rates part-phase images, so a coarse one changes nothing.
@@ -216,6 +266,26 @@ class TestMain:
         code, [cmd] = self._run(bids, tmp_path / "out", "--max-voxel-size", "4")
         assert code == 0
         assert "--bids-filter-file" not in cmd
+
+    def test_user_filter_with_an_equals_sign_is_still_merged(self, ucla, tmp_path):
+        bids, fine, _ = ucla
+        user = tmp_path / "user_filter.json"
+        user.write_text(json.dumps({"bold": {"task": "rest"}}))
+        code, [cmd] = self._run(bids, tmp_path / "out", f"--bids-filter-file={user}")
+        assert code == 0
+        assert cmd.count("--bids-filter-file") == 1
+        filters = json.loads(Path(self._option(cmd, "--bids-filter-file")).read_text())
+        assert filters["bold"] == {"task": "rest"}
+        assert _mriqc_selects(bids, "01", "1", "T1w", filters["t1w"]) == [fine.name]
+
+    @pytest.mark.parametrize("flag", ["-m", "--modalities"])
+    def test_requested_modalities_all_reach_mriqc(self, ucla, tmp_path, flag):
+        bids, _, _ = ucla
+        code, [cmd] = self._run(bids, tmp_path / "out", flag, "T1w", "bold")
+        assert code == 0
+        i = cmd.index("-m")
+        assert cmd[i + 1:i + 3] == ["T1w", "bold"]
+        assert cmd.count("-m") == 1 and "--modalities" not in cmd
 
     def test_user_filter_is_kept_and_narrowed(self, ucla, tmp_path):
         bids, fine, _ = ucla

@@ -161,9 +161,13 @@ leaves out any with a voxel dimension above `--max-voxel-size` (default 2 mm,
 the same limit the sibling ANTs and FreeSurfer apps use):
 
 - If some images of a suffix are within the limit, MRIQC gets a
-  `--bids-filter-file` that selects exactly those. A filter file you pass
-  yourself is merged in: an entity that both set keeps only the values
-  both allow.
+  `--bids-filter-file` that selects exactly those, checked with pybids the
+  way MRIQC queries it. With a filter file of your own, only the images it
+  selects are considered; for a suffix the app filters, its filter (your
+  images within the limit) replaces yours, and the rest of your filter is
+  kept.
+- Only the modalities MRIQC is asked to run (`-m`/`--modalities`, default
+  all) are checked.
 - If none is, that suffix is removed from MRIQC's `--modalities`, and the
   session gets IQMs for its other images only. If no requested modality is
   left, the subject fails without starting MRIQC; if the ones left have no

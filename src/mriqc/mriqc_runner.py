@@ -200,6 +200,8 @@ class MRIQCWrapper:
                 continue
             elif value is True:
                 cmd.append(f"--{key.replace('_', '-')}")
+            elif isinstance(value, list):
+                cmd.extend([f"--{key.replace('_', '-')}", *map(str, value)])
             elif value is not False and value is not None:
                 cmd.extend([f"--{key.replace('_', '-')}", str(value)])
 

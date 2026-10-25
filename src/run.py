@@ -141,16 +141,33 @@ def _gate_mriqc_inputs(
 
     Returns a copy of ``mriqc_kwargs`` with a ``bids_filter_file`` and
     ``modalities`` added when an image is too coarse (see
-    src/mriqc/inputs.py), merged with any filter file or modalities the user
-    passed through. Records the skipped images in the subject's
-    processing_summary.json.
+    src/mriqc/inputs.py). Only the modalities MRIQC is asked to run are
+    gated, and only among the images a user's filter file already selects; a
+    suffix the gate filters gets the gate's filter in place of the user's,
+    the rest of the user's filter is kept. Records the skipped images in the
+    subject's processing_summary.json.
 
     Raises:
         ValueError: If the images cannot be separated by a BIDS filter, or no
             modality is left to run.
     """
-    gate = gate_anat_inputs(bids_dir, subject_id, session_id, max_voxel_size)
     kwargs = dict(mriqc_kwargs)
+    requested = kwargs.get("modalities") or MRIQC_MODALITIES
+    if isinstance(requested, str):
+        requested = [requested]
+    user_filters = {}
+    if kwargs.get("bids_filter_file"):
+        user_filters = {
+            key.lower(): value
+            for key, value in json.loads(
+                Path(kwargs["bids_filter_file"]).read_text()
+            ).items()
+        }
+
+    gate = gate_anat_inputs(
+        bids_dir, subject_id, session_id, max_voxel_size,
+        modalities=requested, user_filters=user_filters,
+    )
     for path, zooms in gate.too_coarse:
         logger.warning(
             f"Not rated by MRIQC, voxels {zooms} mm exceed {max_voxel_size} mm: "
@@ -158,29 +175,13 @@ def _gate_mriqc_inputs(
         )
 
     if gate.filters:
-        filters = {}
-        if kwargs.get("bids_filter_file"):
-            user_filters = json.loads(Path(kwargs["bids_filter_file"]).read_text())
-            filters = {key.lower(): dict(value) for key, value in user_filters.items()}
-        for modality, query in gate.filters.items():
-            merged = filters.setdefault(modality, {})
-            for entity, values in query.items():
-                if entity in merged:
-                    # Both filters must hold: keep the values both allow.
-                    user_values = merged[entity]
-                    if not isinstance(user_values, list):
-                        user_values = [user_values]
-                    values = [v for v in values if v in user_values]
-                merged[entity] = values
+        filters = {**user_filters, **gate.filters}
         filter_file.parent.mkdir(parents=True, exist_ok=True)
         filter_file.write_text(json.dumps(filters, indent=2))
         kwargs["bids_filter_file"] = str(filter_file)
         logger.info(f"MRIQC BIDS filter ({filter_file.name}): {json.dumps(filters)}")
 
     if gate.dropped:
-        requested = kwargs.pop("modalities", None) or MRIQC_MODALITIES
-        if isinstance(requested, str):
-            requested = [requested]
         modalities = [m for m in requested if m not in gate.dropped]
         if not modalities:
             raise ValueError(
@@ -682,7 +683,8 @@ MRIQC Arguments:
                         subject_dir=subject_dir,
                         logger=logger,
                     )
-                except (ValueError, OSError) as e:
+                except Exception as e:
+                    # Fails this subject only, like an MRIQC failure below.
                     logger.error(f"Cannot run MRIQC for sub-{subject_id}: {e}")
                     mriqc_failed.add(subject_id)
                     continue
