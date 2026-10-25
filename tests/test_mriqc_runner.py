@@ -178,9 +178,10 @@ class TestMRIQCWrapperCommands:
             output_dir=wrapper.mriqc_dir, modalities=["T1w", "bold"]
         )
 
-        assert cmd.count("-m") == 2
-        assert "T1w" in cmd
-        assert "bold" in cmd
+        # One -m: MRIQC's -m stores a list, so a second -m would replace it.
+        i = cmd.index("-m")
+        assert cmd[i:i + 3] == ["-m", "T1w", "bold"]
+        assert cmd.count("-m") == 1
 
     def test_create_command_with_performance_params(
         self, test_dirs, mock_mriqc_version

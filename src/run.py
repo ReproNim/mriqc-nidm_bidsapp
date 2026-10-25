@@ -13,6 +13,7 @@ Follows BIDS Apps specification and patterns from freesurfer_bidsapp.
 """
 
 import argparse
+import json
 import logging
 import re
 import shutil
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from . import __version__
+from .mriqc.inputs import DEFAULT_MAX_VOXEL_SIZE, gate_anat_inputs
 from .mriqc.mriqc_runner import MRIQCWrapper, is_iqm_json
 from .utils import (
     normalize_label,
@@ -119,6 +121,85 @@ def _write_iqm_nidm(
         )
     else:
         shutil.copyfile(iqm_ttl, subject_ttl_file)
+
+
+# MRIQC 25's --modalities choices, and its default when none is given.
+MRIQC_MODALITIES = ("T1w", "T2w", "bold", "dwi")
+
+
+def _gate_mriqc_inputs(
+    subject_id: str,
+    session_id: Optional[str],
+    bids_dir: Path,
+    max_voxel_size: float,
+    mriqc_kwargs: dict,
+    filter_file: Path,
+    subject_dir: Path,
+    logger: logging.Logger,
+) -> dict:
+    """MRIQC arguments for one subject that leave out anatomicals over the limit.
+
+    Returns a copy of ``mriqc_kwargs`` with a ``bids_filter_file`` and
+    ``modalities`` added when an image is too coarse (see
+    src/mriqc/inputs.py), merged with any filter file or modalities the user
+    passed through. Records the skipped images in the subject's
+    processing_summary.json.
+
+    Raises:
+        ValueError: If the images cannot be separated by a BIDS filter, or no
+            modality is left to run.
+    """
+    gate = gate_anat_inputs(bids_dir, subject_id, session_id, max_voxel_size)
+    kwargs = dict(mriqc_kwargs)
+    for path, zooms in gate.too_coarse:
+        logger.warning(
+            f"Not rated by MRIQC, voxels {zooms} mm exceed {max_voxel_size} mm: "
+            f"{path.name}"
+        )
+
+    if gate.filters:
+        filters = {}
+        if kwargs.get("bids_filter_file"):
+            user_filters = json.loads(Path(kwargs["bids_filter_file"]).read_text())
+            filters = {key.lower(): dict(value) for key, value in user_filters.items()}
+        for modality, query in gate.filters.items():
+            merged = filters.setdefault(modality, {})
+            for entity, values in query.items():
+                if entity in merged:
+                    # Both filters must hold: keep the values both allow.
+                    user_values = merged[entity]
+                    if not isinstance(user_values, list):
+                        user_values = [user_values]
+                    values = [v for v in values if v in user_values]
+                merged[entity] = values
+        filter_file.parent.mkdir(parents=True, exist_ok=True)
+        filter_file.write_text(json.dumps(filters, indent=2))
+        kwargs["bids_filter_file"] = str(filter_file)
+        logger.info(f"MRIQC BIDS filter ({filter_file.name}): {json.dumps(filters)}")
+
+    if gate.dropped:
+        requested = kwargs.pop("modalities", None) or MRIQC_MODALITIES
+        if isinstance(requested, str):
+            requested = [requested]
+        modalities = [m for m in requested if m not in gate.dropped]
+        if not modalities:
+            raise ValueError(
+                "every requested modality's images exceed --max-voxel-size "
+                f"{max_voxel_size} mm; nothing left for MRIQC to rate"
+            )
+        kwargs["modalities"] = modalities
+
+    summary = {
+        "max_voxel_size": max_voxel_size,
+        "inputs_too_coarse": {
+            path.relative_to(bids_dir).as_posix(): list(zooms)
+            for path, zooms in gate.too_coarse
+        },
+        "modalities_not_run": gate.dropped,
+    }
+    subject_dir.mkdir(parents=True, exist_ok=True)
+    (subject_dir / "processing_summary.json").write_text(json.dumps(summary, indent=2))
+    return kwargs
 
 
 def _iqm_jsons_of_session(
@@ -451,6 +532,16 @@ MRIQC Arguments:
         help="Run MRIQC only, skip NIDM conversion",
     )
     parser.add_argument(
+        "--max-voxel-size",
+        type=float,
+        default=DEFAULT_MAX_VOXEL_SIZE,
+        help=(
+            "Do not rate T1w/T2w images with any voxel dimension above this, "
+            "in mm; MRIQC fails on such images (e.g. thick-slab partial "
+            f"acquisitions) [default: {DEFAULT_MAX_VOXEL_SIZE}]"
+        ),
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -574,8 +665,27 @@ MRIQC Arguments:
             # at its output root (dataset_description.json, .bidsignore, logs/,
             # the *_T1w.html reports) can collide across subjects.
             for subject_id in subjects:
-                _, mriqc_dir = _dirs_for(subject_id)
+                subject_dir, mriqc_dir = _dirs_for(subject_id)
                 logger.info(f"Running MRIQC for sub-{subject_id} → {mriqc_dir}")
+                filter_name = f"bids_filter_sub-{subject_id}"
+                if session_id:
+                    filter_name += f"_ses-{session_id}"
+                try:
+                    run_kwargs = _gate_mriqc_inputs(
+                        subject_id=subject_id,
+                        session_id=session_id,
+                        bids_dir=args.bids_dir,
+                        max_voxel_size=args.max_voxel_size,
+                        mriqc_kwargs=mriqc_kwargs,
+                        # Scratch, outside sub-<id>/, so it is never zipped.
+                        filter_file=mriqc_wrapper.work_dir / f"{filter_name}.json",
+                        subject_dir=subject_dir,
+                        logger=logger,
+                    )
+                except (ValueError, OSError) as e:
+                    logger.error(f"Cannot run MRIQC for sub-{subject_id}: {e}")
+                    mriqc_failed.add(subject_id)
+                    continue
                 try:
                     mriqc_ok = mriqc_wrapper.process_participant(
                         subject_id=subject_id,
@@ -587,7 +697,7 @@ MRIQC Arguments:
                         # exit 0.
                         skip_existing=False,
                         verbose_count=1 if args.verbose else 0,
-                        **mriqc_kwargs,
+                        **run_kwargs,
                     )
                 except Exception as e:
                     logger.error(f"MRIQC failed for sub-{subject_id}: {e}")

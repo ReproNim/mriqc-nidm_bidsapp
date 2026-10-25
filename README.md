@@ -107,6 +107,8 @@ mriqc-nidm <bids_dir> <output_dir> participant \
 - `--skip-mriqc`: Skip MRIQC execution, use existing output
 - `--mriqc-output-dir`: Use existing MRIQC output directory
 - `--skip-nidm-conversion`: Run MRIQC only, skip NIDM conversion
+- `--max-voxel-size`: Leave out T1w/T2w images with any voxel dimension
+  above this, in mm (default 2.0); see [Anatomical images too coarse to rate](#anatomical-images-too-coarse-to-rate)
 - `-v, --verbose`: Enable verbose output
 - `--version`: Show version information
 
@@ -120,6 +122,7 @@ output_dir/
 ├── dataset_description.json     # derivative root, written once
 └── sub-{id}/                    # [/ses-{label}/] when --session-label is given
     ├── nidm.ttl                 # input NIDM + this app's MRIQC metrics
+    ├── processing_summary.json  # images left out by --max-voxel-size
     └── mriqc/                   # MRIQC outputs (IQM JSON, HTML reports, logs)
         └── sub-{id}/
             └── [ses-{label}/]
@@ -142,10 +145,34 @@ MRIQC rates every image, and each image's IQMs become their own record in
 `nidm.ttl`. Besides subject, session, task and run, a record carries the
 image's BIDS `acq`, `ce` and `rec` labels when its filename has them, so two
 images of one run (e.g. `sub-X_ses-1_run-1_T1w` and
-`sub-X_ses-1_acq-hires_run-1_T1w`) can be told apart. The labels are annotated
+`sub-X_ses-1_acq-mprage_run-1_T1w`) can be told apart. The labels are annotated
 in `mriqc_dictionary_v1.csv`; csv2nidm needs a dictionary row for every IQM
 CSV column it annotates, and stops to prompt on stdin for any column without
 one.
+
+#### Anatomical images too coarse to rate
+
+MRIQC's anatomical workflow expects a whole-brain, roughly isotropic image. On
+a thick-slab partial acquisition such as ABIDE II UCLA_Long's `acq-hires` T1w
+(1.5 x 1.5 x 4 mm) MRIQC 25 crashes ("Input inhomogeneity-corrected data seem
+empty"), and the whole session would fail. So before running MRIQC the app
+reads the header of every T1w and T2w image of the subject or session and
+leaves out any with a voxel dimension above `--max-voxel-size` (default 2 mm,
+the same limit the sibling ANTs and FreeSurfer apps use):
+
+- If some images of a suffix are within the limit, MRIQC gets a
+  `--bids-filter-file` that selects exactly those. A filter file you pass
+  yourself is merged in: an entity that both set keeps only the values
+  both allow.
+- If none is, that suffix is removed from MRIQC's `--modalities`, and the
+  session gets IQMs for its other images only. If no requested modality is
+  left, the subject fails without starting MRIQC; if the ones left have no
+  images, MRIQC stops on an empty query and the subject fails.
+
+The images left out, with their voxel sizes, are listed in
+`sub-{id}/[ses-{label}/]processing_summary.json` under `inputs_too_coarse`,
+and a suffix with nothing left under `modalities_not_run`. Functional and
+diffusion images are not checked.
 
 #### Input NIDM lookup
 
