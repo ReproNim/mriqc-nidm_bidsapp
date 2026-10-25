@@ -183,6 +183,18 @@ class TestMRIQCWrapperCommands:
         assert cmd[i:i + 3] == ["-m", "T1w", "bold"]
         assert cmd.count("-m") == 1
 
+    def test_create_command_with_a_multi_value_passthrough(
+        self, test_dirs, mock_mriqc_version
+    ):
+        wrapper = MRIQCWrapper(
+            bids_dir=test_dirs["bids_dir"],
+            output_dir=test_dirs["output_dir"],
+        )
+        cmd = wrapper._create_mriqc_command(
+            output_dir=wrapper.mriqc_dir, task_id=["rest", "movie"])
+        i = cmd.index("--task-id")
+        assert cmd[i:i + 3] == ["--task-id", "rest", "movie"]
+
     def test_create_command_with_one_modality_as_a_string(
         self, test_dirs, mock_mriqc_version
     ):

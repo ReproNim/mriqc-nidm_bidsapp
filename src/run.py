@@ -193,7 +193,7 @@ def _gate_mriqc_inputs(
     summary = {
         "max_voxel_size": max_voxel_size,
         "inputs_too_coarse": {
-            path.relative_to(bids_dir).as_posix(): list(zooms)
+            path.relative_to(Path(bids_dir).absolute()).as_posix(): list(zooms)
             for path, zooms in gate.too_coarse
         },
         "modalities_not_run": gate.dropped,

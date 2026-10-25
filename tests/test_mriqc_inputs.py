@@ -18,7 +18,7 @@ import nibabel as nib
 import numpy as np
 import pytest
 from bids import BIDSLayout
-from bids.layout import Query
+from bids.layout import Query, parse_file_entities
 
 from src.mriqc.inputs import gate_anat_inputs, selecting_filter
 from src.mriqc.mriqc_runner import MRIQCWrapper
@@ -153,6 +153,43 @@ class TestGate:
         gate = gate_anat_inputs(bids, "01", "1", 2.0, user_filters={"t1w": {"run": user_run}})
         assert _mriqc_selects(bids, "01", "1", "T1w", gate.filters["t1w"]) == [fine.name]
 
+    def test_user_filter_on_metadata_is_honoured(self, tmp_path):
+        # MRIQC reads sidecars, so a metadata filter is valid for it; the
+        # gate must answer the same way rather than reject it.
+        bids = _bids(tmp_path / "bids")
+        fine = _anat(bids, "sub-01_ses-1_run-1_T1w.nii.gz", FINE)
+        _anat(bids, "sub-01_ses-1_run-2_T1w.nii.gz", FINE)
+        _anat(bids, "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz", SLAB)
+        for name, tr in [("run-1", 2.3), ("run-2", 2.0), ("acq-hires_run-1", 2.3)]:
+            (bids / "sub-01" / "ses-1" / "anat" / f"sub-01_ses-1_{name}_T1w.json").write_text(
+                json.dumps({"RepetitionTime": tr}))
+        user = {"t1w": {"RepetitionTime": 2.3}}
+        gate = gate_anat_inputs(bids, "01", "1", 2.0, user_filters=user)
+        assert _mriqc_selects(bids, "01", "1", "T1w", gate.filters["t1w"]) == [fine.name]
+        # Nothing coarse: the user's metadata filter passes through untouched.
+        assert gate_anat_inputs(bids, "01", "1", 2.0, user_filters={
+            "t1w": {"RepetitionTime": 2.0}}) == ({}, [], [])
+
+    def test_entity_like_directory_names_above_the_dataset(self, tmp_path):
+        # pybids takes the first match anywhere in the absolute path, so here
+        # MRIQC's layout gives both images run 9. The gate reads them the
+        # same way and still separates them by acquisition.
+        bids = _bids(tmp_path / "x_run-9" / "bids")
+        fine = _anat(bids, "sub-01_ses-1_run-1_T1w.nii.gz", FINE)
+        _anat(bids, "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz", SLAB)
+        gate = gate_anat_inputs(bids, "01", "1", 2.0)
+        assert gate.filters["t1w"]["run"] == [9]
+        assert _mriqc_selects(bids, "01", "1", "T1w", gate.filters["t1w"]) == [fine.name]
+
+    def test_images_mriqc_itself_cannot_tell_apart_fail_loudly(self, tmp_path):
+        # Under y_acq-z/ pybids gives both images acquisition z: no filter
+        # MRIQC reads can keep one without the other.
+        bids = _bids(tmp_path / "y_acq-z" / "bids")
+        _anat(bids, "sub-01_ses-1_run-1_T1w.nii.gz", FINE)
+        _anat(bids, "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz", SLAB)
+        with pytest.raises(ValueError, match="without also keeping"):
+            gate_anat_inputs(bids, "01", "1", 2.0)
+
     def test_user_filter_choosing_only_the_slab_drops_the_modality(self, ucla):
         bids, _, slab = ucla
         gate = gate_anat_inputs(
@@ -189,8 +226,10 @@ class TestGate:
         anat = tmp_path / "sub-01" / "anat"
         keep = [anat / "sub-01_acq-a_run-1_T1w.nii.gz", anat / "sub-01_acq-b_run-2_T1w.nii.gz"]
         drop = [anat / "sub-01_acq-a_run-2_T1w.nii.gz"]
+        entities = {
+            path: parse_file_entities(str(path), config=["bids"]) for path in keep + drop}
         with pytest.raises(ValueError, match="acq-a_run-2"):
-            selecting_filter(keep, drop)
+            selecting_filter(entities, keep, drop)
 
 
 class TestMain:
