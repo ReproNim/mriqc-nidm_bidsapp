@@ -414,6 +414,16 @@ class TestMain:
         filters = json.loads(Path(self._option(cmd, "--bids-filter-file")).read_text())
         assert filters["bold"] == {"run": [2]}
 
+    def test_run_id_matching_no_other_image_fails_before_mriqc(self, tmp_path):
+        # The check for images left honours the filter: bold has run 1 only.
+        bids = _bids(tmp_path / "bids")
+        _anat(bids, "sub-01_ses-1_run-1_T1w.nii.gz", FINE)
+        _anat(bids, "sub-01_ses-1_run-2_T1w.nii.gz", SLAB)
+        _bold(bids)
+        code, calls = self._run(bids, tmp_path / "out", "--run-id", "2")
+        assert code == 1
+        assert calls == []
+
     @pytest.mark.parametrize("limit", ["0", "-1", "nan", "inf"])
     def test_limit_must_be_a_positive_number(self, ucla, tmp_path, limit):
         bids, _, _ = ucla
