@@ -20,6 +20,7 @@ A BIDS App that runs MRIQC quality control on neuroimaging data and converts the
 │   ├── utils.py                      # Utility functions
 │   ├── validators.py                 # Input validation
 │   ├── mriqc/                        # MRIQC wrapper module
+│   │   ├── inputs.py                 # --max-voxel-size gate on T1w/T2w inputs
 │   │   └── mriqc_runner.py           # MRIQC execution wrapper
 │   └── nidm_converter/               # NIDM conversion package
 │       ├── nidm_converter.py         # NIDM detection and copying
