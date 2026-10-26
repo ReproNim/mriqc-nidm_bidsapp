@@ -177,6 +177,9 @@ def _gate_mriqc_inputs(
             ).items()
         }
     run_id = kwargs.pop("run_id", None)
+    if run_id is True or run_id == []:
+        # A bare --run-id: MRIQC reads it as no run id, so drop it.
+        run_id = None
     if run_id is not None:
         runs = run_id if isinstance(run_id, list) else [run_id]
         # As MRIQC's execution.init does: --run-id wins over the file's run.
@@ -188,6 +191,7 @@ def _gate_mriqc_inputs(
     gate = gate_anat_inputs(
         bids_dir, subject_id, session_id, max_voxel_size,
         modalities=requested, user_filters=user_filters,
+        task=kwargs.get("task_id"),
     )
     for path, zooms in gate.too_coarse:
         logger.warning(
@@ -213,7 +217,7 @@ def _gate_mriqc_inputs(
             + f" exceed --max-voxel-size {max_voxel_size} mm, and the other "
             "requested modalities ("
             + (", ".join(m for m in requested if m not in gate.dropped) or "none")
-            + ") have no images"
+            + ") have no images MRIQC would select"
         )
 
     if gate.filters or run_id is not None:

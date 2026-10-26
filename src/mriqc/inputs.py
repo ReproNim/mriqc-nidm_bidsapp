@@ -155,6 +155,7 @@ def gate_anat_inputs(
     max_voxel_size: float,
     modalities: Sequence[str] = ANAT_SUFFIXES,
     user_filters: Optional[dict] = None,
+    task: Optional[object] = None,
 ) -> AnatGate:
     """Split one subject/session's T1w/T2w images by ``max_voxel_size``.
 
@@ -163,6 +164,9 @@ def gate_anat_inputs(
     selects. A returned filter is the user's with entity constraints added
     (or narrowed) so that it selects exactly the user's images within the
     limit, checked with pybids.
+
+    ``task`` is MRIQC's --task-id, which niworkflows adds to the bold query
+    (a user's bold filter still overrides it); it only matters for ``left``.
 
     An image whose header cannot be read is kept: MRIQC reports the read
     error itself, which is clearer than a skip.
@@ -220,7 +224,10 @@ def gate_anat_inputs(
             not dropped
             or mriqc_selects(
                 layout, subject, session, modality,
-                filters.get(modality.lower(), user_filters.get(modality.lower(), {})),
+                {
+                    **({"task": task} if task and modality == "bold" else {}),
+                    **filters.get(modality.lower(), user_filters.get(modality.lower(), {})),
+                },
             )
         )
     ]

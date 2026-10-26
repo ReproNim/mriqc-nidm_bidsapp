@@ -424,6 +424,29 @@ class TestMain:
         assert code == 1
         assert calls == []
 
+    def test_bare_run_id_is_no_run_id(self, ucla, tmp_path):
+        # MRIQC reads a bare --run-id as none; as run 1 it would drop the
+        # bold run, which has no run entity.
+        bids, _, _ = ucla
+        _image(bids / "sub-01" / "ses-1" / "func" / "sub-01_ses-1_task-rest_bold.nii.gz", FINE)
+        code, [cmd] = self._run(bids, tmp_path / "out", "--run-id")
+        assert code == 0
+        filters = json.loads(Path(self._option(cmd, "--bids-filter-file")).read_text())
+        # A folded run id would have given bold a run filter.
+        assert "bold" not in filters
+
+    def test_task_id_matching_no_bold_fails_before_mriqc(self, tmp_path):
+        # niworkflows adds --task-id to the bold query, so a rest run does not
+        # count as left for --task-id movie.
+        bids = _bids(tmp_path / "bids")
+        _anat(bids, "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz", SLAB)
+        _bold(bids)
+        code, calls = self._run(bids, tmp_path / "out", "--task-id", "movie")
+        assert code == 1
+        assert calls == []
+        code, [cmd] = self._run(bids, tmp_path / "out2", "--task-id", "rest")
+        assert code == 0
+
     @pytest.mark.parametrize("limit", ["0", "-1", "nan", "inf"])
     def test_limit_must_be_a_positive_number(self, ucla, tmp_path, limit):
         bids, _, _ = ucla
