@@ -34,7 +34,7 @@ From: nipreps/mriqc:25.0.0rc0
     # same key in %labels (it warns "already exists ... not overwriting"); a
     # label written here replaces it either way. SingularityCE sets only
     # SINGULARITY_LABELS, hence the fallback.
-    echo "org.opencontainers.image.version 0.1.2" >> "${APPTAINER_LABELS:-$SINGULARITY_LABELS}"
+    echo "org.opencontainers.image.version 0.1.3" >> "${APPTAINER_LABELS:-$SINGULARITY_LABELS}"
 
     # Create opt directory for application code
     mkdir -p /opt
@@ -94,14 +94,14 @@ From: nipreps/mriqc:25.0.0rc0
     mriqc-nidm "$@"
 
 %help
-    MRIQC-NIDM BIDS App 0.1.2
+    MRIQC-NIDM BIDS App 0.1.3
 
     A BIDS Application that executes MRIQC (MRI Quality Control) on BIDS datasets
     and converts output to NIDM (Neuroimaging Data Model) format for improved
     interoperability.
 
     Version Information:
-    - MRIQC-NIDM: 0.1.2
+    - MRIQC-NIDM: 0.1.3
     - MRIQC: 25.0.0rc0
     - Base Image: nipreps/mriqc:25.0.0rc0
 
