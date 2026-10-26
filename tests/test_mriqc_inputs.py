@@ -447,6 +447,20 @@ class TestMain:
         code, [cmd] = self._run(bids, tmp_path / "out2", "--task-id", "rest")
         assert code == 0
 
+    @pytest.mark.parametrize("filter_task, task_id, rated", [
+        ("movie", "rest", True), ("rest", "movie", False)])
+    def test_task_id_overrides_the_filter_task_as_in_mriqc(
+            self, tmp_path, filter_task, task_id, rated):
+        # niworkflows sets --task-id on the bold query after the filter file.
+        bids = _bids(tmp_path / "bids")
+        _anat(bids, "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz", SLAB)
+        _bold(bids)  # task-rest
+        user = tmp_path / "user_filter.json"
+        user.write_text(json.dumps({"bold": {"task": filter_task}}))
+        code, calls = self._run(bids, tmp_path / "out", "--bids-filter-file", str(user),
+                                "--task-id", task_id)
+        assert (code, len(calls)) == ((0, 1) if rated else (1, 0))
+
     @pytest.mark.parametrize("limit", ["0", "-1", "nan", "inf"])
     def test_limit_must_be_a_positive_number(self, ucla, tmp_path, limit):
         bids, _, _ = ucla
