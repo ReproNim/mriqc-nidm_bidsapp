@@ -17,7 +17,9 @@ from unittest.mock import patch
 import nibabel as nib
 import numpy as np
 import pytest
-from bids import BIDSLayout
+import re
+
+from bids import BIDSLayout, BIDSLayoutIndexer
 from bids.layout import Query, parse_file_entities
 
 from src.mriqc.inputs import gate_anat_inputs, selecting_filter
@@ -47,9 +49,30 @@ def _anat(root, name, zooms, sub="01", ses="1"):
     return _image(root / f"sub-{sub}" / f"ses-{ses}" / "anat" / name, zooms)
 
 
+def _bold(root, sub="01", ses="1"):
+    return _image(root / f"sub-{sub}" / f"ses-{ses}" / "func"
+                  / f"sub-{sub}_ses-{ses}_task-rest_run-1_bold.nii.gz", FINE)
+
+
+def _sidecars(root, trs, sub="01", ses="1"):
+    for name, tr in trs.items():
+        (root / f"sub-{sub}" / f"ses-{ses}" / "anat"
+         / f"sub-{sub}_ses-{ses}_{name}_T1w.json").write_text(
+            json.dumps({"RepetitionTime": tr}))
+
+
 def _mriqc_selects(bids_dir, subject, session, suffix, query):
     """What MRIQC 25 selects: niworkflows collect_data's query plus the filter."""
-    layout = BIDSLayout(str(bids_dir), validate=False)
+    # mriqc/config.py execution.init indexes without validation and with this
+    # ignore list, so a non-BIDS name such as run before acq is still rated.
+    ignore = [
+        re.compile(r"^(?!/sub-(" + subject + "))"),
+        re.compile(r"^/sub-[a-zA-Z0-9]+(/ses-[a-zA-Z0-9]+)?/"
+                   r"(beh|fmap|pet|perf|meg|eeg|ieeg|micr|nirs)"),
+        re.compile(r"^.+(?<!(_T1w|_T2w|bold|_dwi))\.(json|nii|nii\.gz)$"),
+    ]
+    layout = BIDSLayout(str(Path(bids_dir).absolute()),
+                        indexer=BIDSLayoutIndexer(validate=False, ignore=ignore))
     base = {"datatype": "anat", "suffix": suffix, "part": ["mag", None]}
     get_kwargs = {"return_type": "file", "subject": subject,
                   "session": session or Query.OPTIONAL,
@@ -96,7 +119,7 @@ class TestGate:
         bids = _bids(tmp_path / "bids")
         _anat(bids, "sub-01_ses-1_T1w.nii.gz", FINE)
         _anat(bids, "sub-01_ses-1_T2w.nii.gz", (1.0, 1.0, 1.0))
-        assert gate_anat_inputs(bids, "01", "1", 2.0) == ({}, [], [])
+        assert gate_anat_inputs(bids, "01", "1", 2.0)[:3] == ({}, [], [])
 
     def test_limit_is_inclusive(self, tmp_path):
         bids = _bids(tmp_path / "bids")
@@ -131,7 +154,7 @@ class TestGate:
 
     def test_unrequested_modalities_are_not_gated(self, ucla):
         bids, _, _ = ucla
-        assert gate_anat_inputs(bids, "01", "1", 2.0, modalities=["bold"]) == ({}, [], [])
+        assert gate_anat_inputs(bids, "01", "1", 2.0, modalities=["bold"])[:3] == ({}, [], [])
 
     def test_directory_names_above_the_dataset_do_not_become_entities(self, tmp_path):
         # The derivatives patterns (res-, desc-, ...) are not anchored to the
@@ -168,7 +191,7 @@ class TestGate:
         assert _mriqc_selects(bids, "01", "1", "T1w", gate.filters["t1w"]) == [fine.name]
         # Nothing coarse: the user's metadata filter passes through untouched.
         assert gate_anat_inputs(bids, "01", "1", 2.0, user_filters={
-            "t1w": {"RepetitionTime": 2.0}}) == ({}, [], [])
+            "t1w": {"RepetitionTime": 2.0}})[:3] == ({}, [], [])
 
     def test_entity_like_directory_names_above_the_dataset(self, tmp_path):
         # pybids takes the first match anywhere in the absolute path, so here
@@ -202,14 +225,14 @@ class TestGate:
         bids, _, _ = ucla
         gate = gate_anat_inputs(
             bids, "01", "1", 2.0, user_filters={"t1w": {"acquisition": None}})
-        assert gate == ({}, [], [])
+        assert gate[:3] == ({}, [], [])
 
     def test_phase_images_are_not_gated(self, tmp_path):
         # MRIQC never rates part-phase images, so a coarse one changes nothing.
         bids = _bids(tmp_path / "bids")
         _anat(bids, "sub-01_ses-1_part-mag_T1w.nii.gz", FINE)
         _anat(bids, "sub-01_ses-1_part-phase_T1w.nii.gz", SLAB)
-        assert gate_anat_inputs(bids, "01", "1", 2.0) == ({}, [], [])
+        assert gate_anat_inputs(bids, "01", "1", 2.0)[:3] == ({}, [], [])
 
     def test_unreadable_header_is_left_for_mriqc(self, tmp_path):
         bids = _bids(tmp_path / "bids")
@@ -219,6 +242,53 @@ class TestGate:
         gate = gate_anat_inputs(bids, "01", "1", 2.0)
         assert gate.dropped == []
         assert _mriqc_selects(bids, "01", "1", "T1w", gate.filters["t1w"]) == [broken.name]
+
+    def test_non_bids_name_is_gated_as_mriqc_indexes_it(self, tmp_path):
+        # run before acq is not valid BIDS; a validating index skips the file,
+        # but MRIQC indexes without validation and would rate it.
+        bids = _bids(tmp_path / "bids")
+        fine = _anat(bids, "sub-01_ses-1_run-1_T1w.nii.gz", FINE)
+        slab = _anat(bids, "sub-01_ses-1_run-1_acq-hires_T1w.nii.gz", SLAB)
+        assert _mriqc_selects(bids, "01", "1", "T1w", {}) == sorted([fine.name, slab.name])
+        gate = gate_anat_inputs(bids, "01", "1", 2.0)
+        assert [p for p, _ in gate.too_coarse] == [slab]
+        assert _mriqc_selects(bids, "01", "1", "T1w", gate.filters["t1w"]) == [fine.name]
+
+    def test_user_metadata_filter_keeps_excluding_what_it_excluded(self, tmp_path):
+        # rec-norm is left out by the user's TR filter and by no entity the
+        # kept and coarse images share, so only the user's filter excludes it.
+        bids = _bids(tmp_path / "bids")
+        fine = _anat(bids, "sub-01_ses-1_run-1_T1w.nii.gz", FINE)
+        _anat(bids, "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz", SLAB)
+        _anat(bids, "sub-01_ses-1_rec-norm_run-1_T1w.nii.gz", FINE)
+        _sidecars(bids, {"run-1": 2.3, "acq-hires_run-1": 2.3, "rec-norm_run-1": 2.0})
+        user = {"t1w": {"RepetitionTime": 2.3}}
+        gate = gate_anat_inputs(bids, "01", "1", 2.0, user_filters=user)
+        assert gate.filters["t1w"]["RepetitionTime"] == 2.3
+        assert _mriqc_selects(bids, "01", "1", "T1w", gate.filters["t1w"]) == [fine.name]
+
+    def test_user_filter_lets_entities_mix_that_alone_could_not(self, tmp_path):
+        # Kept acq-a_run-1 and acq-b_run-2 allow acq-a_run-2 by entities, but
+        # the user's TR filter already excludes it, so the slab is separable.
+        bids = _bids(tmp_path / "bids")
+        keep = [_anat(bids, "sub-01_ses-1_acq-a_run-1_T1w.nii.gz", FINE),
+                _anat(bids, "sub-01_ses-1_acq-b_run-2_T1w.nii.gz", FINE)]
+        _anat(bids, "sub-01_ses-1_acq-a_run-2_T1w.nii.gz", FINE)
+        _anat(bids, "sub-01_ses-1_acq-c_run-1_T1w.nii.gz", SLAB)
+        _sidecars(bids, {"acq-a_run-1": 2.3, "acq-b_run-2": 2.3,
+                         "acq-a_run-2": 2.0, "acq-c_run-1": 2.3})
+        gate = gate_anat_inputs(bids, "01", "1", 2.0,
+                                user_filters={"t1w": {"RepetitionTime": 2.3}})
+        assert _mriqc_selects(bids, "01", "1", "T1w", gate.filters["t1w"]) == sorted(
+            p.name for p in keep)
+
+    def test_left_lists_modalities_with_images_once_a_suffix_is_dropped(self, tmp_path):
+        bids = _bids(tmp_path / "bids")
+        _anat(bids, "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz", SLAB)
+        every = ["T1w", "T2w", "bold", "dwi"]
+        assert gate_anat_inputs(bids, "01", "1", 2.0, modalities=every).left == []
+        _bold(bids)
+        assert gate_anat_inputs(bids, "01", "1", 2.0, modalities=every).left == ["bold"]
 
     def test_images_no_filter_can_separate_are_an_error(self, tmp_path):
         # Kept acq-a_run-1 and acq-b_run-2 allow acq in {a, b} and run in
@@ -287,6 +357,7 @@ class TestMain:
     def test_slab_only_session_runs_the_other_modalities(self, tmp_path):
         bids = _bids(tmp_path / "bids")
         _anat(bids, "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz", SLAB)
+        _bold(bids)
         code, [cmd] = self._run(bids, tmp_path / "out")
         assert code == 0
         i = cmd.index("-m")
@@ -299,6 +370,56 @@ class TestMain:
         code, calls = self._run(bids, tmp_path / "out", "--modalities", "T1w")
         assert code == 1
         assert calls == []
+
+    def test_slab_and_nothing_else_fails_before_mriqc_naming_the_slab(
+            self, tmp_path, caplog):
+        bids = _bids(tmp_path / "bids")
+        slab = _anat(bids, "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz", SLAB)
+        code, calls = self._run(bids, tmp_path / "out")
+        assert code == 1
+        assert calls == []
+        assert any("nothing left for MRIQC to rate" in r.message and slab.name in r.message
+                   for r in caplog.records)
+        summary = json.loads(
+            (tmp_path / "out" / "sub-01" / "ses-1" / "processing_summary.json").read_text())
+        assert summary["modalities_not_run"] == ["T1w"]
+
+    def test_run_id_cannot_bring_the_slab_back(self, tmp_path):
+        # MRIQC applies --run-id over the filter file, so it must not reach
+        # MRIQC; here run 2 is the slab and run 1 the 1 mm image.
+        bids = _bids(tmp_path / "bids")
+        fine = _anat(bids, "sub-01_ses-1_run-1_T1w.nii.gz", FINE)
+        _anat(bids, "sub-01_ses-1_run-2_T1w.nii.gz", SLAB)
+        _bold(bids)
+        code, [cmd] = self._run(bids, tmp_path / "out", "--run-id", "1", "2")
+        assert code == 0
+        assert "--run-id" not in cmd
+        filters = json.loads(Path(self._option(cmd, "--bids-filter-file")).read_text())
+        assert _mriqc_selects(bids, "01", "1", "T1w", filters["t1w"]) == [fine.name]
+        # The other modalities keep the run restriction MRIQC would have set.
+        assert filters["bold"] == {"run": [1, 2]}
+
+    def test_run_id_selecting_only_the_slab_drops_t1w(self, tmp_path):
+        bids = _bids(tmp_path / "bids")
+        _anat(bids, "sub-01_ses-1_run-1_T1w.nii.gz", FINE)
+        _anat(bids, "sub-01_ses-1_run-2_T1w.nii.gz", SLAB)
+        _bold(bids)
+        _image(bids / "sub-01" / "ses-1" / "func"
+               / "sub-01_ses-1_task-rest_run-2_bold.nii.gz", FINE)
+        code, [cmd] = self._run(bids, tmp_path / "out", "--run-id", "2")
+        assert code == 0
+        assert "--run-id" not in cmd
+        i = cmd.index("-m")
+        assert cmd[i + 1:i + 4] == ["T2w", "bold", "dwi"]
+        filters = json.loads(Path(self._option(cmd, "--bids-filter-file")).read_text())
+        assert filters["bold"] == {"run": [2]}
+
+    @pytest.mark.parametrize("limit", ["0", "-1", "nan", "inf"])
+    def test_limit_must_be_a_positive_number(self, ucla, tmp_path, limit):
+        bids, _, _ = ucla
+        with pytest.raises(SystemExit) as exit_info:
+            self._run(bids, tmp_path / "out", "--max-voxel-size", limit)
+        assert exit_info.value.code == 2
 
     def test_a_larger_limit_lets_the_slab_through(self, ucla, tmp_path):
         bids, _, _ = ucla

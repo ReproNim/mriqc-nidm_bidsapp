@@ -11,7 +11,9 @@ MRIQC cannot filter on voxel size, so the gate reads the T1w/T2w headers
 itself and hands MRIQC a ``--bids-filter-file`` that selects exactly the
 images within the limit. A suffix with no image within the limit is removed
 from MRIQC's ``--modalities`` instead, since no entity filter selects nothing.
-Functional and diffusion images are not gated.
+Functional and diffusion images are not gated, but when a suffix is removed
+the gate checks that MRIQC still has images to rate, since MRIQC itself stops
+on an empty query with a message that does not name the cause.
 
 Which images a filter selects is decided by pybids, on a layout indexed the
 way MRIQC 25 indexes the dataset (mriqc/config.py, execution.init), never by
@@ -35,8 +37,13 @@ DEFAULT_MAX_VOXEL_SIZE = 2.0  # mm, any dimension
 
 ANAT_SUFFIXES = ("T1w", "T2w")
 
-# MRIQC's own anatomical query (niworkflows DEFAULT_BIDS_QUERIES).
-_DEFAULT_QUERY = {"datatype": "anat", "part": ["mag", None]}
+# MRIQC's own query per modality (niworkflows 1.10 DEFAULT_BIDS_QUERIES).
+_DEFAULT_QUERIES = {
+    "T1w": {"datatype": "anat", "suffix": "T1w", "part": ["mag", None]},
+    "T2w": {"datatype": "anat", "suffix": "T2w", "part": ["mag", None]},
+    "bold": {"datatype": "func", "suffix": "bold", "part": ["mag", None]},
+    "dwi": {"suffix": "dwi"},
+}
 
 # Entities MRIQC sets itself from its command line and default query. The
 # session is MRIQC's only when --session-id is given; otherwise a filter may
@@ -46,7 +53,9 @@ _RESERVED_ENTITIES = {"subject", "datatype", "suffix", "extension"}
 # filters: {lower-case suffix: pybids query}, for --bids-filter-file.
 # dropped: suffixes with images but none within the limit.
 # too_coarse: (Path, voxel size tuple) pairs over the limit.
-AnatGate = namedtuple("AnatGate", ["filters", "dropped", "too_coarse"])
+# left: the requested modalities MRIQC still has images for; only checked
+#   when a suffix is dropped, otherwise every requested modality.
+AnatGate = namedtuple("AnatGate", ["filters", "dropped", "too_coarse", "left"])
 
 
 def voxel_size(path: Path) -> Tuple[float, ...]:
@@ -75,7 +84,7 @@ def mriqc_layout(bids_dir: Path, subject: str) -> BIDSLayout:
 def mriqc_selects(
     layout: BIDSLayout, subject: str, session: Optional[str], suffix: str, query: dict
 ) -> List[Path]:
-    """The ``suffix`` images MRIQC selects with filter ``query``.
+    """The ``suffix`` images (T1w, T2w, bold or dwi) MRIQC selects with ``query``.
 
     niworkflows' collect_data: the default query updated with the filter,
     which may also override the session.
@@ -86,7 +95,7 @@ def mriqc_selects(
         "session": session or Query.OPTIONAL,
         "extension": [".nii", ".nii.gz"],
     }
-    found = layout.get(**{**get_kwargs, **_DEFAULT_QUERY, "suffix": suffix, **query})
+    found = layout.get(**{**get_kwargs, **_DEFAULT_QUERIES[suffix], **query})
     return sorted(Path(f) for f in found)
 
 
@@ -151,8 +160,9 @@ def gate_anat_inputs(
 
     Only suffixes in ``modalities`` are gated, and within them only the images
     ``user_filters`` (a --bids-filter-file's content, lower-case keys) already
-    selects. A returned filter replaces the user's for its suffix: it selects
-    exactly the user's images within the limit, checked with pybids.
+    selects. A returned filter is the user's with entity constraints added
+    (or narrowed) so that it selects exactly the user's images within the
+    limit, checked with pybids.
 
     An image whose header cannot be read is kept: MRIQC reports the read
     error itself, which is clearer than a skip.
@@ -161,7 +171,7 @@ def gate_anat_inputs(
     suffixes = [suffix for suffix in ANAT_SUFFIXES if suffix in modalities]
     filters, dropped, too_coarse = {}, [], []
     if not suffixes:
-        return AnatGate(filters, dropped, too_coarse)
+        return AnatGate(filters, dropped, too_coarse, list(modalities))
     layout = mriqc_layout(bids_dir, subject)
     for suffix in suffixes:
         user_query = user_filters.get(suffix.lower(), {})
@@ -183,17 +193,17 @@ def gate_anat_inputs(
         if not keep:
             dropped.append(suffix)
             continue
-        # A user filter can widen the default query (e.g. part), so its
-        # images count too.
-        images = sorted(
-            {*mriqc_selects(layout, subject, session, suffix, {}), *keep, *drop}
-        )
-        others = [path for path in images if path not in keep]
+        # Separate the kept images from the coarse ones only and add that to
+        # the user's filter, which goes on excluding what it excluded (also
+        # by metadata, which no entity filter could reproduce).
         entities = {
             path: layout.get_file(str(path)).get_entities(metadata=False)
-            for path in images
+            for path in [*keep, *drop]
         }
-        query = selecting_filter(entities, keep, others, with_session=session is None)
+        query = {
+            **user_query,
+            **selecting_filter(entities, keep, drop, with_session=session is None),
+        }
         selected = mriqc_selects(layout, subject, session, suffix, query)
         if selected != sorted(keep):
             raise ValueError(
@@ -202,4 +212,16 @@ def gate_anat_inputs(
                 + " instead of " + ", ".join(p.name for p in keep)
             )
         filters[suffix.lower()] = query
-    return AnatGate(filters, dropped, too_coarse)
+    left = [
+        modality
+        for modality in modalities
+        if modality not in dropped
+        and (
+            not dropped
+            or mriqc_selects(
+                layout, subject, session, modality,
+                filters.get(modality.lower(), user_filters.get(modality.lower(), {})),
+            )
+        )
+    ]
+    return AnatGate(filters, dropped, too_coarse, left)

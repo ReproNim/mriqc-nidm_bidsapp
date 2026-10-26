@@ -160,18 +160,20 @@ reads the header of every T1w and T2w image of the subject or session and
 leaves out any with a voxel dimension above `--max-voxel-size` (default 2 mm,
 the same limit the sibling ANTs and FreeSurfer apps use):
 
+- Only the modalities MRIQC is asked to run (`-m`/`--modalities`, default
+  all) are checked, and with a filter file of your own only the images it
+  selects.
 - If some images of a suffix are within the limit, MRIQC gets a
   `--bids-filter-file` that selects exactly those, checked with pybids the
-  way MRIQC queries it. With a filter file of your own, only the images it
-  selects are considered; for a suffix the app filters, its filter (your
-  images within the limit) replaces yours, and the rest of your filter is
-  kept.
-- Only the modalities MRIQC is asked to run (`-m`/`--modalities`, default
-  all) are checked.
-- If none is, that suffix is removed from MRIQC's `--modalities`, and the
-  session gets IQMs for its other images only. If no requested modality is
-  left, the subject fails without starting MRIQC; if the ones left have no
-  images, MRIQC stops on an empty query and the subject fails.
+  way MRIQC queries it. For that suffix your filter is kept and narrowed by
+  BIDS entities; your filters for other suffixes are passed on unchanged.
+  A `--run-id` you pass is written into that filter file rather than given
+  to MRIQC, which would otherwise apply it over the filter.
+- If no image of a suffix is within the limit, that suffix is removed from
+  MRIQC's `--modalities`, and the session gets IQMs for its other images
+  only. If MRIQC would then have no image left to rate, the subject fails
+  without starting MRIQC, with an error naming the images that were too
+  coarse.
 
 The images left out, with their voxel sizes, are listed in
 `sub-{id}/[ses-{label}/]processing_summary.json` under `inputs_too_coarse`,

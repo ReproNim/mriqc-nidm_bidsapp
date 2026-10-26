@@ -15,6 +15,7 @@ Follows BIDS Apps specification and patterns from freesurfer_bidsapp.
 import argparse
 import json
 import logging
+import math
 import re
 import shutil
 import sys
@@ -123,6 +124,14 @@ def _write_iqm_nidm(
         shutil.copyfile(iqm_ttl, subject_ttl_file)
 
 
+def _voxel_limit(value: str) -> float:
+    """argparse type for --max-voxel-size: a positive, finite number of mm."""
+    limit = float(value)
+    if not math.isfinite(limit) or limit <= 0:
+        raise argparse.ArgumentTypeError(f"must be a positive number of mm, got {value}")
+    return limit
+
+
 # MRIQC 25's --modalities choices, and its default when none is given.
 MRIQC_MODALITIES = ("T1w", "T2w", "bold", "dwi")
 
@@ -143,13 +152,17 @@ def _gate_mriqc_inputs(
     ``modalities`` added when an image is too coarse (see
     src/mriqc/inputs.py). Only the modalities MRIQC is asked to run are
     gated, and only among the images a user's filter file already selects; a
-    suffix the gate filters gets the gate's filter in place of the user's,
-    the rest of the user's filter is kept. Records the skipped images in the
-    subject's processing_summary.json.
+    suffix the gate filters gets the user's filter narrowed to the images
+    within the limit. Records the skipped images in the subject's
+    processing_summary.json.
+
+    A passed-through ``--run-id`` is folded into the filter file instead of
+    reaching MRIQC: MRIQC sets every requested modality's ``run`` filter from
+    it after reading the filter file, which would undo the gate.
 
     Raises:
-        ValueError: If the images cannot be separated by a BIDS filter, or no
-            modality is left to run.
+        ValueError: If the images cannot be separated by a BIDS filter, or
+            MRIQC would be left with no image to rate.
     """
     kwargs = dict(mriqc_kwargs)
     requested = kwargs.get("modalities") or MRIQC_MODALITIES
@@ -163,6 +176,14 @@ def _gate_mriqc_inputs(
                 Path(kwargs["bids_filter_file"]).read_text()
             ).items()
         }
+    run_id = kwargs.pop("run_id", None)
+    if run_id is not None:
+        runs = run_id if isinstance(run_id, list) else [run_id]
+        # As MRIQC's execution.init does: --run-id wins over the file's run.
+        for modality in requested:
+            user_filters[modality.lower()] = {
+                **user_filters.get(modality.lower(), {}), "run": runs
+            }
 
     gate = gate_anat_inputs(
         bids_dir, subject_id, session_id, max_voxel_size,
@@ -174,22 +195,6 @@ def _gate_mriqc_inputs(
             f"{path.name}"
         )
 
-    if gate.filters:
-        filters = {**user_filters, **gate.filters}
-        filter_file.parent.mkdir(parents=True, exist_ok=True)
-        filter_file.write_text(json.dumps(filters, indent=2))
-        kwargs["bids_filter_file"] = str(filter_file)
-        logger.info(f"MRIQC BIDS filter ({filter_file.name}): {json.dumps(filters)}")
-
-    if gate.dropped:
-        modalities = [m for m in requested if m not in gate.dropped]
-        if not modalities:
-            raise ValueError(
-                "every requested modality's images exceed --max-voxel-size "
-                f"{max_voxel_size} mm; nothing left for MRIQC to rate"
-            )
-        kwargs["modalities"] = modalities
-
     summary = {
         "max_voxel_size": max_voxel_size,
         "inputs_too_coarse": {
@@ -200,6 +205,26 @@ def _gate_mriqc_inputs(
     }
     subject_dir.mkdir(parents=True, exist_ok=True)
     (subject_dir / "processing_summary.json").write_text(json.dumps(summary, indent=2))
+
+    if gate.dropped and not gate.left:
+        raise ValueError(
+            "nothing left for MRIQC to rate: "
+            + ", ".join(path.name for path, _ in gate.too_coarse)
+            + f" exceed --max-voxel-size {max_voxel_size} mm, and the other "
+            "requested modalities ("
+            + (", ".join(m for m in requested if m not in gate.dropped) or "none")
+            + ") have no images"
+        )
+
+    if gate.filters or run_id is not None:
+        filters = {**user_filters, **gate.filters}
+        filter_file.parent.mkdir(parents=True, exist_ok=True)
+        filter_file.write_text(json.dumps(filters, indent=2))
+        kwargs["bids_filter_file"] = str(filter_file)
+        logger.info(f"MRIQC BIDS filter ({filter_file.name}): {json.dumps(filters)}")
+
+    if gate.dropped:
+        kwargs["modalities"] = [m for m in requested if m not in gate.dropped]
     return kwargs
 
 
@@ -534,7 +559,7 @@ MRIQC Arguments:
     )
     parser.add_argument(
         "--max-voxel-size",
-        type=float,
+        type=_voxel_limit,
         default=DEFAULT_MAX_VOXEL_SIZE,
         help=(
             "Do not rate T1w/T2w images with any voxel dimension above this, "
