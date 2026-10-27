@@ -165,7 +165,8 @@ class MRIQCWrapper:
 
         # Modality filters. MRIQC's -m stores a list (nargs='*'), so a repeated
         # -m keeps only the last one: all modalities go after a single flag.
-        if modalities:
+        # A bare -m (True) is no selection: MRIQC runs every modality.
+        if modalities and modalities is not True:
             if isinstance(modalities, str):
                 modalities = [modalities]
             cmd.extend(["-m", *modalities])

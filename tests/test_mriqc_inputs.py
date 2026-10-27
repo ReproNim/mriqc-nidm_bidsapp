@@ -242,6 +242,33 @@ class TestGate:
         gate = gate_anat_inputs(bids, "01", "1", 2.0)
         assert gate.dropped == []
         assert _mriqc_selects(bids, "01", "1", "T1w", gate.filters["t1w"]) == [broken.name]
+        assert gate.unchecked == [broken]
+
+    def test_unfetched_annex_file_is_an_error(self, tmp_path):
+        # MRIQC would fetch it and rate it without the check.
+        bids = _bids(tmp_path / "bids")
+        _anat(bids, "sub-01_ses-1_run-1_T1w.nii.gz", FINE)
+        missing = bids / "sub-01" / "ses-1" / "anat" / "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz"
+        missing.symlink_to("../../../.git/annex/objects/XX/missing.nii.gz")
+        with pytest.raises(ValueError, match="datalad get"):
+            gate_anat_inputs(bids, "01", "1", 2.0)
+
+    def test_a_modality_mriqc_lacks_counts_as_left_for_mriqc_to_reject(self, tmp_path):
+        bids = _bids(tmp_path / "bids")
+        _anat(bids, "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz", SLAB)
+        gate = gate_anat_inputs(bids, "01", "1", 2.0, modalities=["T1w", "FLAIR"])
+        assert gate.dropped == ["T1w"]
+        assert gate.left == ["FLAIR"]
+
+    def test_user_filter_pybids_reads_loosely_is_checked_before_mriqc(self, tmp_path):
+        # With regex_search, acq "hi" also matches "hires", so the filter the
+        # gate builds would select the slab; the pybids re-check catches it.
+        bids = _bids(tmp_path / "bids")
+        _anat(bids, "sub-01_ses-1_acq-hi_run-1_T1w.nii.gz", FINE)
+        _anat(bids, "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz", SLAB)
+        with pytest.raises(ValueError, match="selects"):
+            gate_anat_inputs(bids, "01", "1", 2.0,
+                             user_filters={"t1w": {"regex_search": True}})
 
     def test_non_bids_name_is_gated_as_mriqc_indexes_it(self, tmp_path):
         # run before acq is not valid BIDS; a validating index skips the file,
@@ -305,7 +332,9 @@ class TestGate:
 class TestMain:
     """main() passes the gate to MRIQC; subprocess.run stands in for MRIQC."""
 
-    def _run(self, bids, out, *extra, writes_iqms=True):
+    def _run(self, bids, out, *extra, writes_iqms=True, limit="2"):
+        """main() with the gate on at ``limit`` mm, unless ``limit`` is None
+        or ``extra`` sets --max-voxel-size itself."""
         calls = []
 
         def fake_mriqc(cmd, **kwargs):
@@ -319,6 +348,8 @@ class TestMain:
         argv = ["run.py", str(bids), str(out), "participant",
                 "--participant-label", "01", "--session-label", "1",
                 "--skip-nidm-conversion", *extra]
+        if limit is not None and not any(a.startswith("--max-voxel-size") for a in extra):
+            argv += ["--max-voxel-size", limit]
         with patch.object(sys, "argv", argv), \
                 patch.object(MRIQCWrapper, "_get_mriqc_version", return_value="25.0.0rc0"), \
                 patch("src.mriqc.mriqc_runner.subprocess.run", side_effect=fake_mriqc):
@@ -364,12 +395,64 @@ class TestMain:
         assert cmd[i + 1:i + 4] == ["T2w", "bold", "dwi"]
         assert cmd.count("-m") == 1
 
-    def test_nothing_left_to_run_fails_before_mriqc(self, tmp_path):
+    def test_nothing_left_to_run_fails_before_mriqc(self, tmp_path, caplog):
         bids = _bids(tmp_path / "bids")
         _anat(bids, "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz", SLAB)
         code, calls = self._run(bids, tmp_path / "out", "--modalities", "T1w")
         assert code == 1
         assert calls == []
+        # A single -m value is one modality, not its letters.
+        assert any("nothing left for MRIQC to rate" in r.message
+                   and "other requested modalities (none)" in r.message
+                   for r in caplog.records)
+
+    def test_off_by_default(self, ucla, tmp_path):
+        bids, _, _ = ucla
+        code, [cmd] = self._run(bids, tmp_path / "out", limit=None)
+        assert code == 0
+        assert "--bids-filter-file" not in cmd and "-m" not in cmd
+        assert not (tmp_path / "out" / "sub-01" / "ses-1" / "processing_summary.json").exists()
+
+    @pytest.mark.parametrize("limit", [None, "2"])
+    def test_bare_modalities_flag_runs_every_modality(self, tmp_path, limit):
+        bids = _bids(tmp_path / "bids")
+        _anat(bids, "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz", SLAB)
+        _bold(bids)
+        code, [cmd] = self._run(bids, tmp_path / "out", "-m", limit=limit)
+        assert code == 0
+        if limit is None:
+            assert "-m" not in cmd
+        else:
+            i = cmd.index("-m")
+            assert cmd[i + 1:i + 4] == ["T2w", "bold", "dwi"]
+
+    def test_requested_modalities_are_the_ones_gated(self, tmp_path):
+        bids = _bids(tmp_path / "bids")
+        _anat(bids, "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz", SLAB)
+        _bold(bids)
+        code, [cmd] = self._run(bids, tmp_path / "out", "-m", "bold")
+        assert code == 0
+        i = cmd.index("-m")
+        assert cmd[i + 1:i + 2] == ["bold"] and "T2w" not in cmd
+
+    def test_summary_lists_images_whose_header_could_not_be_read(self, tmp_path):
+        bids = _bids(tmp_path / "bids")
+        _anat(bids, "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz", SLAB)
+        broken = bids / "sub-01" / "ses-1" / "anat" / "sub-01_ses-1_run-1_T1w.nii.gz"
+        broken.write_bytes(b"not a nifti")
+        code, [cmd] = self._run(bids, tmp_path / "out")
+        assert code == 0
+        summary = json.loads(
+            (tmp_path / "out" / "sub-01" / "ses-1" / "processing_summary.json").read_text())
+        assert summary["inputs_not_checked"] == [broken.relative_to(bids).as_posix()]
+
+    def test_bare_task_id_is_no_task_id(self, tmp_path):
+        # MRIQC reads a bare --task-id as none, so the rest run is left.
+        bids = _bids(tmp_path / "bids")
+        _anat(bids, "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz", SLAB)
+        _bold(bids)
+        code, calls = self._run(bids, tmp_path / "out", "--task-id")
+        assert (code, len(calls)) == (0, 1)
 
     def test_slab_and_nothing_else_fails_before_mriqc_naming_the_slab(
             self, tmp_path, caplog):
@@ -398,6 +481,19 @@ class TestMain:
         assert _mriqc_selects(bids, "01", "1", "T1w", filters["t1w"]) == [fine.name]
         # The other modalities keep the run restriction MRIQC would have set.
         assert filters["bold"] == {"run": [1, 2]}
+
+    def test_run_id_wins_over_the_filter_run_as_in_mriqc(self, tmp_path):
+        bids = _bids(tmp_path / "bids")
+        fine = _anat(bids, "sub-01_ses-1_run-1_T1w.nii.gz", FINE)
+        _anat(bids, "sub-01_ses-1_run-2_T1w.nii.gz", FINE)
+        _anat(bids, "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz", SLAB)
+        user = tmp_path / "user_filter.json"
+        user.write_text(json.dumps({"T1w": {"run": 2}}))
+        code, [cmd] = self._run(bids, tmp_path / "out", "--bids-filter-file", str(user),
+                                "--run-id", "1")
+        assert code == 0
+        filters = json.loads(Path(self._option(cmd, "--bids-filter-file")).read_text())
+        assert _mriqc_selects(bids, "01", "1", "T1w", filters["t1w"]) == [fine.name]
 
     def test_run_id_selecting_only_the_slab_drops_t1w(self, tmp_path):
         bids = _bids(tmp_path / "bids")

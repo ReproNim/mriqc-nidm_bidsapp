@@ -1,11 +1,16 @@
-"""Anatomical images too coarse for MRIQC to rate.
+"""Leaving T1w/T2w images over a voxel size limit out of MRIQC (opt-in).
 
-MRIQC's anatomical workflow assumes a whole-brain, roughly isotropic image.
-ABIDE II UCLA_Long's ``acq-hires`` T1w is a 1.5 x 1.5 x 4 mm partial-coverage
-slab: MRIQC 25 crashes on it ("Input inhomogeneity-corrected data seem empty")
-and the whole session then fails, although the same session's 1 mm T1w is
-rated fine. The sibling ANTs and FreeSurfer apps skip such images with the
-same ``--max-voxel-size`` limit (default 2 mm, any dimension).
+MRIQC 25 stops with "Input inhomogeneity-corrected data seem empty" when the
+tissue segmentation of an anatomical image finds no white matter it is
+confident about (no voxel with a white matter probability of at least 0.9
+survives one erosion), and the whole session then fails. Images whose
+contrast it cannot separate into tissues, or with partial coverage, do that. Voxel size does not
+cause it, but it can single such images out: ABIDE II UCLA_Long's
+``acq-hires`` T1w (1.5 x 1.5 x 4 mm) fails because of its contrast
+(resampled to 1.5 mm isotropic it still fails, while the same session's 1 mm
+T1w resampled onto its grid is rated). ``--max-voxel-size`` uses the limit
+the sibling ANTs and FreeSurfer apps use (any dimension, in mm), but is off
+by default here.
 
 MRIQC cannot filter on voxel size, so the gate reads the T1w/T2w headers
 itself and hands MRIQC a ``--bids-filter-file`` that selects exactly the
@@ -33,8 +38,6 @@ from bids.layout import Query
 
 logger = logging.getLogger("mriqc-nidm.inputs")
 
-DEFAULT_MAX_VOXEL_SIZE = 2.0  # mm, any dimension
-
 ANAT_SUFFIXES = ("T1w", "T2w")
 
 # MRIQC's own query per modality (niworkflows 1.10 DEFAULT_BIDS_QUERIES).
@@ -55,7 +58,10 @@ _RESERVED_ENTITIES = {"subject", "datatype", "suffix", "extension"}
 # too_coarse: (Path, voxel size tuple) pairs over the limit.
 # left: the requested modalities MRIQC still has images for; only checked
 #   when a suffix is dropped, otherwise every requested modality.
-AnatGate = namedtuple("AnatGate", ["filters", "dropped", "too_coarse", "left"])
+# unchecked: images kept because their header could not be read.
+AnatGate = namedtuple(
+    "AnatGate", ["filters", "dropped", "too_coarse", "left", "unchecked"]
+)
 
 
 def voxel_size(path: Path) -> Tuple[float, ...]:
@@ -169,24 +175,32 @@ def gate_anat_inputs(
     after applying the filters, so it overrides a filter's task; it only
     matters for ``left``.
 
-    An image whose header cannot be read is kept: MRIQC reports the read
-    error itself, which is clearer than a skip.
+    An image whose header cannot be read is kept and listed in
+    ``unchecked``: MRIQC reports the read error itself, which is clearer
+    than a skip. A git-annex file that has not been fetched is an error
+    instead, since MRIQC would fetch it and rate it unchecked.
     """
     user_filters = user_filters or {}
     suffixes = [suffix for suffix in ANAT_SUFFIXES if suffix in modalities]
-    filters, dropped, too_coarse = {}, [], []
+    filters, dropped, too_coarse, unchecked = {}, [], [], []
     if not suffixes:
-        return AnatGate(filters, dropped, too_coarse, list(modalities))
+        return AnatGate(filters, dropped, too_coarse, list(modalities), unchecked)
     layout = mriqc_layout(bids_dir, subject)
     for suffix in suffixes:
         user_query = user_filters.get(suffix.lower(), {})
         keep, drop = [], []
         for path in mriqc_selects(layout, subject, session, suffix, user_query):
+            if not path.exists():
+                raise ValueError(
+                    f"{path.name} is not present (a git-annex file that has not "
+                    "been fetched?); run 'datalad get' on the subject first"
+                )
             try:
                 zooms = voxel_size(path)
             except Exception as e:
                 logger.warning(f"Could not read the header of {path.name}: {e}")
                 keep.append(path)
+                unchecked.append(path)
                 continue
             if max(zooms) > max_voxel_size:
                 drop.append(path)
@@ -223,6 +237,8 @@ def gate_anat_inputs(
         if modality not in dropped
         and (
             not dropped
+            # A modality MRIQC 25 does not have is MRIQC's to reject.
+            or modality not in _DEFAULT_QUERIES
             or mriqc_selects(
                 layout, subject, session, modality,
                 {
@@ -232,4 +248,4 @@ def gate_anat_inputs(
             )
         )
     ]
-    return AnatGate(filters, dropped, too_coarse, left)
+    return AnatGate(filters, dropped, too_coarse, left, unchecked)
