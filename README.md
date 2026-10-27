@@ -154,8 +154,8 @@ one.
 
 MRIQC 25 stops with "Input inhomogeneity-corrected data seem empty" when the
 tissue segmentation of a T1w or T2w image finds no white matter it is
-confident about, and the whole session then fails. Images whose contrast it
-cannot separate into tissues, or that cover only part of the brain, do that. ABIDE II
+confident about, and the whole session then fails. An image whose contrast
+it cannot separate into tissues can do that, and so can a thin slab. ABIDE II
 UCLA_Long's `acq-hires` T1w (1.5 x 1.5 x 4 mm) is one: it fails because of its
 contrast, not its voxel size, while the same session's 1 mm T1w is rated.
 
@@ -183,8 +183,9 @@ dimension above the limit:
   without starting MRIQC, with an error naming the images that were too
   coarse. A bold or dwi series too short for MRIQC (which drops them after
   selecting) still counts as an image left, so MRIQC starts and fails.
-- A T1w or T2w file that is not present (a git-annex file that has not been
-  fetched) fails the subject; run `datalad get` first. BABS fetches the
+- A T1w or T2w git-annex file whose content has not been fetched (a broken
+  symlink, or a pointer file in an unlocked dataset) fails the subject; run
+  `datalad get` first. BABS fetches the
   subject before running the app.
 - With a filter file that sets `session` for any modality, MRIQC drops the
   session from every modality's query, which the check does not model: an

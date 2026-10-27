@@ -180,7 +180,7 @@ def _gate_mriqc_inputs(
             ).items()
         }
     run_id = kwargs.pop("run_id", None)
-    if run_id is True or run_id == []:
+    if run_id is True:
         # A bare --run-id: MRIQC reads it as no run id, so drop it.
         run_id = None
     if run_id is not None:
@@ -192,7 +192,7 @@ def _gate_mriqc_inputs(
             }
 
     task_id = kwargs.get("task_id")
-    if task_id is True or task_id == []:
+    if task_id is True:
         # A bare --task-id: MRIQC reads it as no task id.
         task_id = None
 
@@ -715,6 +715,9 @@ MRIQC Arguments:
                 if session_id:
                     filter_name += f"_ses-{session_id}"
                 run_kwargs = mriqc_kwargs
+                # Only the gate writes it, so a summary from an earlier run
+                # with other settings must not survive into this one's zip.
+                (subject_dir / "processing_summary.json").unlink(missing_ok=True)
                 try:
                     if args.max_voxel_size is not None:
                         run_kwargs = _gate_mriqc_inputs(

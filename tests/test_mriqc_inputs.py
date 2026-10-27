@@ -253,6 +253,15 @@ class TestGate:
         with pytest.raises(ValueError, match="datalad get"):
             gate_anat_inputs(bids, "01", "1", 2.0)
 
+    def test_unfetched_file_in_an_unlocked_dataset_is_an_error(self, tmp_path):
+        # Unlocked annex files are pointer files, which exist.
+        bids = _bids(tmp_path / "bids")
+        _anat(bids, "sub-01_ses-1_run-1_T1w.nii.gz", FINE)
+        pointer = bids / "sub-01" / "ses-1" / "anat" / "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz"
+        pointer.write_text("/annex/objects/MD5E-s724550--a2d069d579fff2d2f2d19d1bc06975e7.nii.gz\n")
+        with pytest.raises(ValueError, match="datalad get"):
+            gate_anat_inputs(bids, "01", "1", 2.0)
+
     def test_a_modality_mriqc_lacks_counts_as_left_for_mriqc_to_reject(self, tmp_path):
         bids = _bids(tmp_path / "bids")
         _anat(bids, "sub-01_ses-1_acq-hires_run-1_T1w.nii.gz", SLAB)
@@ -412,6 +421,14 @@ class TestMain:
         assert code == 0
         assert "--bids-filter-file" not in cmd and "-m" not in cmd
         assert not (tmp_path / "out" / "sub-01" / "ses-1" / "processing_summary.json").exists()
+
+    def test_a_rerun_without_the_gate_drops_the_old_summary(self, ucla, tmp_path):
+        bids, _, _ = ucla
+        summary = tmp_path / "out" / "sub-01" / "ses-1" / "processing_summary.json"
+        assert self._run(bids, tmp_path / "out")[0] == 0
+        assert summary.exists()
+        assert self._run(bids, tmp_path / "out", limit=None)[0] == 0
+        assert not summary.exists()
 
     @pytest.mark.parametrize("limit", [None, "2"])
     def test_bare_modalities_flag_runs_every_modality(self, tmp_path, limit):

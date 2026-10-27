@@ -3,8 +3,9 @@
 MRIQC 25 stops with "Input inhomogeneity-corrected data seem empty" when the
 tissue segmentation of an anatomical image finds no white matter it is
 confident about (no voxel with a white matter probability of at least 0.9
-survives one erosion), and the whole session then fails. Images whose
-contrast it cannot separate into tissues, or with partial coverage, do that. Voxel size does not
+survives one erosion), and the whole session then fails. An image whose
+contrast it cannot separate into tissues can do that, and so can a thin
+slab. Voxel size does not
 cause it, but it can single such images out: ABIDE II UCLA_Long's
 ``acq-hires`` T1w (1.5 x 1.5 x 4 mm) fails because of its contrast
 (resampled to 1.5 mm isotropic it still fails, while the same session's 1 mm
@@ -69,6 +70,16 @@ def voxel_size(path: Path) -> Tuple[float, ...]:
     import nibabel as nib
 
     return tuple(round(float(z), 3) for z in nib.load(str(path)).header.get_zooms()[:3])
+
+
+def _not_fetched(path: Path) -> bool:
+    """A git-annex file whose content is not here: a broken symlink (locked)
+    or a small pointer file naming the annex object (unlocked)."""
+    if not path.exists():
+        return True
+    if path.stat().st_size > 1024:
+        return False
+    return path.read_bytes().startswith(b"/annex/objects/")
 
 
 def mriqc_layout(bids_dir: Path, subject: str) -> BIDSLayout:
@@ -190,9 +201,9 @@ def gate_anat_inputs(
         user_query = user_filters.get(suffix.lower(), {})
         keep, drop = [], []
         for path in mriqc_selects(layout, subject, session, suffix, user_query):
-            if not path.exists():
+            if _not_fetched(path):
                 raise ValueError(
-                    f"{path.name} is not present (a git-annex file that has not "
+                    f"{path.name} has no content here (a git-annex file that has not "
                     "been fetched?); run 'datalad get' on the subject first"
                 )
             try:
