@@ -178,9 +178,36 @@ class TestMRIQCWrapperCommands:
             output_dir=wrapper.mriqc_dir, modalities=["T1w", "bold"]
         )
 
-        assert cmd.count("-m") == 2
-        assert "T1w" in cmd
-        assert "bold" in cmd
+        # One -m: MRIQC's -m stores a list, so a second -m would replace it.
+        i = cmd.index("-m")
+        assert cmd[i:i + 3] == ["-m", "T1w", "bold"]
+        assert cmd.count("-m") == 1
+
+    def test_create_command_with_a_multi_value_passthrough(
+        self, test_dirs, mock_mriqc_version
+    ):
+        wrapper = MRIQCWrapper(
+            bids_dir=test_dirs["bids_dir"],
+            output_dir=test_dirs["output_dir"],
+        )
+        cmd = wrapper._create_mriqc_command(
+            output_dir=wrapper.mriqc_dir, task_id=["rest", "movie"])
+        i = cmd.index("--task-id")
+        assert cmd[i:i + 3] == ["--task-id", "rest", "movie"]
+
+    def test_create_command_with_one_modality_as_a_string(
+        self, test_dirs, mock_mriqc_version
+    ):
+        # A single passed-through value arrives as a string; iterating it
+        # would give -m T 1 w.
+        wrapper = MRIQCWrapper(
+            bids_dir=test_dirs["bids_dir"],
+            output_dir=test_dirs["output_dir"],
+        )
+        cmd = wrapper._create_mriqc_command(output_dir=wrapper.mriqc_dir, modalities="T1w")
+        i = cmd.index("-m")
+        assert cmd[i:i + 2] == ["-m", "T1w"]
+        assert "T" not in cmd
 
     def test_create_command_with_performance_params(
         self, test_dirs, mock_mriqc_version

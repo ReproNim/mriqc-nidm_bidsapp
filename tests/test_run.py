@@ -33,6 +33,18 @@ class TestParseMriqcArgs:
 
         assert result == {"mem": "16G", "ica": True, "nprocs": 4}
 
+    def test_parse_multiple_values(self):
+        args = ["--modalities", "T1w", "bold", "--nprocs", "4"]
+        assert parse_mriqc_args(args) == {"modalities": ["T1w", "bold"], "nprocs": 4}
+
+    def test_parse_short_modalities_flag(self):
+        assert parse_mriqc_args(["-m", "T1w", "bold"]) == {"modalities": ["T1w", "bold"]}
+
+    def test_parse_equals_form(self):
+        args = ["--bids-filter-file=/x/my_filter.json", "--mem=16G"]
+        assert parse_mriqc_args(args) == {
+            "bids_filter_file": "/x/my_filter.json", "mem": "16G"}
+
     def test_parse_empty_args(self):
         """Test parsing empty argument list."""
         args = []

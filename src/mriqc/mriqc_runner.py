@@ -163,10 +163,13 @@ class MRIQCWrapper:
         if session_id:
             cmd.extend(["--session-id", session_id])
 
-        # Modality filters
-        if modalities:
-            for modality in modalities:
-                cmd.extend(["-m", modality])
+        # Modality filters. MRIQC's -m stores a list (nargs='*'), so a repeated
+        # -m keeps only the last one: all modalities go after a single flag.
+        # A bare -m (True) is no selection: MRIQC runs every modality.
+        if modalities and modalities is not True:
+            if isinstance(modalities, str):
+                modalities = [modalities]
+            cmd.extend(["-m", *modalities])
 
         # Performance parameters
         if nprocs is not None:
@@ -198,6 +201,8 @@ class MRIQCWrapper:
                 continue
             elif value is True:
                 cmd.append(f"--{key.replace('_', '-')}")
+            elif isinstance(value, list):
+                cmd.extend([f"--{key.replace('_', '-')}", *map(str, value)])
             elif value is not False and value is not None:
                 cmd.extend([f"--{key.replace('_', '-')}", str(value)])
 
