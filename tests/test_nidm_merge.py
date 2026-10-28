@@ -516,12 +516,18 @@ def test_pynidm_derivative_query_finds_every_iqm_record(
     MRIQC agent with rdfs:type nidm:SoftwareAgent instead, which the query
     never sees, so it found no MRIQC data at all.
     """
-    import nidm.experiment.CDE
-    from nidm.experiment import Query as query
+    # PyNIDM 5 moved the query layer to nidm.linkml.experiment (lowercase
+    # modules); 4.x has it under nidm.experiment.
+    try:
+        from nidm.linkml.experiment import cde
+        from nidm.linkml.experiment import query
+    except ImportError:
+        from nidm.experiment import CDE as cde
+        from nidm.experiment import Query as query
 
     # IQM data elements are defined in the graph itself; the CDE fallback
     # would download the ANTs/FreeSurfer/FSL vocabularies.
-    monkeypatch.setattr(nidm.experiment.CDE, "getCDEs", lambda *a, **k: rdflib.Graph())
+    monkeypatch.setattr(cde, "getCDEs", lambda *a, **k: rdflib.Graph())
 
     nidm_dir = tmp_path / "nidm"
     if with_input:
