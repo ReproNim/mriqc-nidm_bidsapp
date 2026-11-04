@@ -29,6 +29,9 @@ PROV = Namespace("http://www.w3.org/ns/prov#")
 NIDM = Namespace("http://purl.org/nidash/nidm#")
 DCT = Namespace("http://purl.org/dc/terms/")
 SIO = Namespace("http://semanticscience.org/ontology/sio.owl#")
+# The IQM properties' namespace (json_to_csv's software url). csv2nidm 4.x
+# named it mriqc; 5.0.0 names it nothing, and rdflib then writes ns1.
+MRIQC = Namespace("https://mriqc.readthedocs.io/en/stable/")
 # csv2nidm writes rdfs:type (not a term of the closed RDFS namespace) on the
 # entities of a new file.
 RDFS_TYPE = URIRef(str(RDFS) + "type")
@@ -229,6 +232,7 @@ def merge_iqms_into_nidm(
     for graph in (base, iqm):
         for prefix, namespace in graph.namespaces():
             merged.bind(prefix, namespace, override=False)
+    merged.bind("mriqc", MRIQC, override=True, replace=True)
     merged.serialize(destination=str(output_ttl), format="turtle")
 
     logger.info(

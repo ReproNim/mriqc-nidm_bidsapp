@@ -132,6 +132,29 @@ class TestMergeIqmsIntoNidm:
         cjv = rdflib.URIRef("https://mriqc.readthedocs.io/en/stable/cjv_x")
         assert float(g.value(ent, cjv)) == pytest.approx(0.1)
 
+    def test_iqm_properties_keep_the_mriqc_prefix(self, tmp_path, logger):
+        # csv2nidm 5.0.0 binds no prefix name to the MRIQC namespace, so the
+        # IQM properties came out as ns1:cjv_x instead of mriqc:cjv_x. Same
+        # IRIs, but the files are harder to read and differ from earlier
+        # releases. The merged output names the namespace mriqc again.
+        jsons = ["/work/sub-51209_ses-2_run-1_T1w.json"]
+        # Neither bidsmri2nidm's input nor csv2nidm 5's output names it.
+        no_prefix = "@prefix mriqc: <https://mriqc.readthedocs.io/en/stable/> .\n"
+        base_text = input_nidm_ttl().replace(no_prefix, "")
+        iqm_text = iqm_nidm_ttl(jsons).replace(no_prefix, "").replace(
+            "mriqc:cjv_x", "<https://mriqc.readthedocs.io/en/stable/cjv_x>")
+        assert "mriqc:" not in base_text + iqm_text
+        base = _write(tmp_path / "in.ttl", base_text)
+        iqm = _write(tmp_path / "iqm.ttl", iqm_text)
+        out = tmp_path / "out.ttl"
+
+        merge_iqms_into_nidm(base, iqm, out, logger)
+
+        text = out.read_text()
+        assert "@prefix mriqc: <https://mriqc.readthedocs.io/en/stable/> ." in text
+        assert "mriqc:cjv_x" in text
+        assert "ns1:" not in text
+
     def test_jsonld_input(self, tmp_path, logger):
         """The merge parses its input by extension, so a .jsonld path works.
 
