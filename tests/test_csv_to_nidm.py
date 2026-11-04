@@ -286,6 +286,54 @@ def test_convert_csv_to_nidm_execution_failure(tmp_files, mock_logger):
             )
 
 
+def _convert_with(tmp_files, logger, **run):
+    with patch("shutil.which", return_value="/usr/bin/csv2nidm"), patch(
+        "subprocess.run", **run
+    ):
+        return convert_csv_to_nidm(
+            csv_file=tmp_files["csv_file"],
+            dictionary_csv=tmp_files["dictionary_csv"],
+            software_metadata_csv=tmp_files["software_metadata_csv"],
+            output_ttl=tmp_files["output_ttl"],
+            logger=logger,
+        )
+
+
+def test_convert_csv_to_nidm_logs_stderr_of_a_successful_run(tmp_files, caplog):
+    """csv2nidm can finish with exit 0 and report on stderr what it did not do;
+    every non-empty stderr line is logged as a warning."""
+    result = subprocess.CompletedProcess(
+        args=["csv2nidm"], returncode=0, stdout="",
+        stderr="/x/csv2nidm.py:1: UserWarning: column foo not mapped\n\n  warnings.warn(\n")
+    logger = logging.getLogger("test_csv2nidm_stderr")
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        assert _convert_with(tmp_files, logger, return_value=result) is True
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == [
+        "csv2nidm: /x/csv2nidm.py:1: UserWarning: column foo not mapped",
+        "csv2nidm: warnings.warn(",
+    ]
+
+
+def test_convert_csv_to_nidm_success_without_stderr_logs_no_warning(tmp_files, caplog):
+    result = subprocess.CompletedProcess(args=["csv2nidm"], returncode=0, stdout="ok", stderr="")
+    logger = logging.getLogger("test_csv2nidm_quiet")
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        assert _convert_with(tmp_files, logger, return_value=result) is True
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+def test_convert_csv_to_nidm_failure_logs_stdout_and_stderr(tmp_files, caplog):
+    error = subprocess.CalledProcessError(
+        returncode=1, cmd=["csv2nidm"], output="Reading CSV\n", stderr="Error: Invalid CSV format")
+    logger = logging.getLogger("test_csv2nidm_failure")
+    with caplog.at_level(logging.INFO, logger=logger.name), \
+            pytest.raises(RuntimeError, match="Invalid CSV format"):
+        _convert_with(tmp_files, logger, side_effect=error)
+    errors = " ".join(r.getMessage() for r in caplog.records if r.levelno == logging.ERROR)
+    assert "Reading CSV" in errors and "Error: Invalid CSV format" in errors
+
+
 def test_convert_csv_to_nidm_timeout(tmp_files, mock_logger):
     """Test error when csv2nidm execution times out."""
     with patch("shutil.which", return_value="/usr/bin/csv2nidm"), patch(

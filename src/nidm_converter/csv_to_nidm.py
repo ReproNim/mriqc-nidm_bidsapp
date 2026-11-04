@@ -185,9 +185,13 @@ def convert_csv_to_nidm(
     else:
         logger.info(f"Successfully created NIDM: {output_ttl}")
 
-    # Log any warnings from stdout
     if result.stdout:
         logger.debug(f"csv2nidm output: {result.stdout}")
+    # A run csv2nidm completes can still report on stderr what it skipped or
+    # could not do; log every line so it reaches the job log.
+    for line in (result.stderr or "").splitlines():
+        if line.strip():
+            logger.warning(f"csv2nidm: {line.strip()}")
 
     return True
 
