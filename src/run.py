@@ -16,9 +16,11 @@ import argparse
 import json
 import logging
 import math
+import os
 import re
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -34,7 +36,6 @@ from .utils import (
 from .nidm_converter import (
     convert_csv_to_nidm,
     convert_mriqc_json_to_csv,
-    copy_and_prepare_nidm,
     detect_existing_nidm,
     build_subject_output_path,
     NIDM_FILENAME,
@@ -92,9 +93,10 @@ def _write_iqm_nidm(
     used as the subject's nidm.ttl or attached to the input NIDM with each
     record linked to its own image.
 
-    source_nidm is the input NIDM as found in the NIDM input directory;
-    augmentation_target is the copy of it being written. Errors name the
-    source, since that is the file to fix.
+    augmentation_target is the graph the IQM records are attached to, read
+    and never written; subject_ttl_file is where the result is written.
+    source_nidm is the input NIDM as found in the NIDM input directory, named
+    in errors, since that is the file to fix.
 
     Raises:
         RuntimeError: If csv2nidm fails
@@ -402,22 +404,14 @@ def process_subject(
         # Get data dictionary path
         dictionary_csv = get_mriqc_dictionary()
 
-        # Step 3a: Copy existing NIDM and prepare augmentation target
-        # CRITICAL: Must copy once before loop, not inside loop!
-        augmentation_target = None
+        # Step 3a: The input NIDM is only read: the merged graph (or, without an
+        # input, csv2nidm's own graph) is written to a temporary file beside
+        # nidm.ttl and renamed to nidm.ttl once its records check out (Step 3d).
+        # A failed conversion therefore leaves no nidm.ttl, rather than a copy
+        # of the input that looks like a finished output.
+        augmentation_target = existing_nidm
         if existing_nidm:
-            copied_nidm = copy_and_prepare_nidm(
-                existing_nidm, subject_dir, logger
-            )
-            # Rename to canonical name if different
-            if copied_nidm != subject_ttl_file:
-                copied_nidm.rename(subject_ttl_file)
-                logger.info(
-                    "Renamed copied NIDM to canonical name: "
-                    f"{subject_ttl_file.name}"
-                )
-            augmentation_target = subject_ttl_file
-            logger.info(f"Will augment existing NIDM: {subject_ttl_file}")
+            logger.info(f"Will augment existing NIDM: {existing_nidm}")
 
         # Step 3b: Convert every IQM JSON to a one-row CSV
         any_scan_failed = False
@@ -441,29 +435,40 @@ def process_subject(
         # Step 3c: One csv2nidm call for all IQM rows of this job, attached
         # to the input NIDM when there is one (see _write_iqm_nidm).
         if csv_paths:
+            fd, tmp_name = tempfile.mkstemp(prefix=".nidm.", suffix=".ttl", dir=subject_dir)
+            os.close(fd)
+            pending_ttl = Path(tmp_name)
             try:
-                _write_iqm_nidm(
-                    csv_paths=csv_paths,
-                    software_csv_path=software_csv_path,
-                    dictionary_csv=dictionary_csv,
-                    staging_dir=staging_dir,
-                    augmentation_target=augmentation_target,
-                    subject_ttl_file=subject_ttl_file,
-                    logger=logger,
-                    source_nidm=existing_nidm,
-                )
-            except Exception as e:
-                logger.error(f"Error during NIDM conversion: {e}")
-                return False
+                try:
+                    _write_iqm_nidm(
+                        csv_paths=csv_paths,
+                        software_csv_path=software_csv_path,
+                        dictionary_csv=dictionary_csv,
+                        staging_dir=staging_dir,
+                        augmentation_target=augmentation_target,
+                        subject_ttl_file=pending_ttl,
+                        logger=logger,
+                        source_nidm=existing_nidm,
+                    )
+                except Exception as e:
+                    logger.error(f"Error during NIDM conversion: {e}")
+                    return False
 
-            # Step 3d: Every converted IQM JSON must be exactly one record.
-            problems = check_iqm_records(subject_ttl_file, converted_jsons)
-            if problems:
-                logger.error(
-                    f"{subject_ttl_file} does not hold one MRIQC record per IQM "
-                    f"JSON for sub-{subject_id}: " + "; ".join(problems)
-                )
-                return False
+                # Step 3d: Every converted IQM JSON must be exactly one record.
+                problems = check_iqm_records(pending_ttl, converted_jsons)
+                if problems:
+                    logger.error(
+                        f"The NIDM written for sub-{subject_id} does not hold one "
+                        "MRIQC record per IQM JSON: " + "; ".join(problems)
+                    )
+                    return False
+                # mkstemp makes the file private; give it the mode a new file gets
+                umask = os.umask(0)
+                os.umask(umask)
+                os.chmod(pending_ttl, 0o666 & ~umask)
+                os.replace(pending_ttl, subject_ttl_file)
+            finally:
+                pending_ttl.unlink(missing_ok=True)
             logger.info(
                 f"Wrote {len(converted_jsons)} MRIQC IQM record(s) to "
                 f"{subject_ttl_file.name}"

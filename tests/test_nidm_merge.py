@@ -411,6 +411,11 @@ def test_input_nidm_without_the_image_fails_the_subject(tmp_path, logger, caplog
     assert ok is False
     # The input that has to be fixed, not the copy in the output directory.
     assert str(found) in caplog.text
+    # No copy of the input is left looking like a finished output.
+    subject_dir = tmp_path / "out" / "sub-51209" / "ses-1"
+    assert not (subject_dir / "nidm.ttl").exists()
+    assert [p.name for p in subject_dir.iterdir() if p.is_file()] == []
+    assert found.read_text() == input_nidm_ttl()
 
 
 def test_dropped_iqm_record_fails_the_subject(tmp_path, logger):
@@ -435,6 +440,51 @@ def test_dropped_iqm_record_fails_the_subject(tmp_path, logger):
             skip_nidm=False, logger=logger,
         )
     assert ok is False
+    assert not (subject_dir / "nidm.ttl").exists()
+    assert [p.name for p in subject_dir.iterdir() if p.is_file()] == []
+
+
+def test_failed_csv2nidm_with_input_nidm_leaves_no_nidm_ttl(tmp_path, logger):
+    """The input NIDM used to be copied to nidm.ttl before conversion, so a
+    failed csv2nidm left an unmodified copy of the input as the output."""
+    from unittest.mock import patch
+
+    nidm_dir = tmp_path / "nidm"
+    _write(nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl", input_nidm_ttl())
+    with patch("src.run.convert_csv_to_nidm",
+               side_effect=RuntimeError("csv2nidm failed: boom")):
+        ok, ttl = _run(tmp_path, SES1_STEMS, nidm_dir, logger)
+    assert ok is False
+    assert not ttl.exists()
+    assert [p.name for p in ttl.parent.iterdir() if p.is_file()] == []
+
+
+def test_successful_merge_replaces_nidm_ttl_and_leaves_no_temporary(tmp_path, logger):
+    """The merged graph is written to a temporary file beside nidm.ttl and
+    renamed into place."""
+    from unittest.mock import patch
+
+    output_dir = tmp_path / "out"
+    subject_dir = output_dir / "sub-51209" / "ses-1"
+    stems = ["sub-51209_ses-1_run-1_T1w"]
+    mriqc_dir = _mriqc_tree(subject_dir, stems)
+    jsons = sorted(mriqc_dir.rglob("*.json"))
+    subject_dir.joinpath("nidm.ttl").write_text("stale output of an earlier run")
+
+    def csv2nidm(**kwargs):
+        Path(kwargs["output_ttl"]).write_text(iqm_nidm_ttl([str(j) for j in jsons]))
+        return True
+
+    with patch("src.run.convert_csv_to_nidm", side_effect=csv2nidm):
+        ok = process_subject(
+            subject_id="51209", bids_dir=tmp_path, output_dir=output_dir,
+            subject_dir=subject_dir, mriqc_dir=mriqc_dir, session_id="1",
+            nidm_input_dir=tmp_path / "no_nidm", skip_mriqc=True,
+            skip_nidm=False, logger=logger,
+        )
+    assert ok is True
+    assert sorted(_linked_images(subject_dir / "nidm.ttl")) == [f"{s}.json" for s in stems]
+    assert [p.name for p in subject_dir.iterdir() if p.is_file()] == ["nidm.ttl"]
 
 
 # Session runs carry only their own session's IQMs.
