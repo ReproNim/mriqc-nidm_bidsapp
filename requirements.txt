@@ -2,11 +2,10 @@
 click>=8.0.0
 pybids>=0.15.1
 pandas>=1.3.0
-# PyNIDM 5.0.0 declares rdflib>=6.3.2,<8; its oxigraph-backed store (oxrdflib)
-# is used with rdflib 7, the version the image has shipped since 0.1.0.
-rdflib>=7.0.0,<8
+# PyNIDM 5.0.0 declares rdflib>=6.3.2,<8. The lower bound is the current
+# rdflib release: without it pip keeps the base image's older rdflib 7.0.0.
+rdflib>=7.6.0,<8
 pynidm==5.0.0
 # Pinned explicitly, with the same range PyNIDM 5.0.0 declares, so the runtime
 # dependency of its oxigraph-backed rdflib store is visible here.
 oxrdflib~=0.5.0
-nidmresults>=2.0.0
