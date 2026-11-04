@@ -238,7 +238,9 @@ csv2nidm also gives the IQM records and the agent their NIDM types through
 `rdfs:type`, a predicate neither RDF nor RDFS defines. Before writing
 `nidm.ttl`, the app rewrites those triples as `rdf:type` and adds
 `prov:SoftwareAgent` to the agent. Output from a csv2nidm that already types the
-agent `prov:SoftwareAgent` (incf-nidash/PyNIDM#457) is not rewritten.
+agent `prov:SoftwareAgent` (incf-nidash/PyNIDM#457) is not rewritten. csv2nidm
+from PyNIDM 5.0.0, which the image ships, already writes `rdf:type` and types
+the agent `prov:SoftwareAgent`, so with it the rewrite changes nothing.
 
 A job fails (non-zero exit) when an IQM record matches no acquisition or
 several, or when `nidm.ttl` does not end up with exactly one IQM record per
