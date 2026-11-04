@@ -60,18 +60,15 @@ From: nipreps/mriqc:25.0.0rc0
     cd /opt
 
     # Install conda-forge packages with micromamba, then pip packages
-    # NOTE the two-step pip install. pynidm 4.5.0 *declares* rdflib>=6.3.2,<6.4,
-    # but it ships an oxigraph-backed store whose oxrdflib requires rdflib<8 and
-    # actually wants rdflib 7. Installing requirements first and then
-    # force-upgrading rdflib deliberately overrides pynidm's stale pin -- a
-    # single resolved install cannot express this (uv refuses it outright).
-    # Same order as freesurfer-nidm_bidsapp.
+    # requirements.txt pins pynidm 5.0.0 and rdflib 7 in one resolvable set
+    # (PyNIDM 5.0.0 declares rdflib>=6.3.2,<8), so a single pip install is
+    # enough. The editable install is --no-deps so it cannot re-resolve
+    # anything already pinned.
     micromamba install -n base -y -c conda-forge \
         pandas \
         click \
         pybids && \
     pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir --upgrade 'rdflib>=7.0.0,<8' && \
     pip install --no-deps -e .
 
     # Last step: everything this recipe put under /opt must be usable by
@@ -103,6 +100,7 @@ From: nipreps/mriqc:25.0.0rc0
     Version Information:
     - MRIQC-NIDM: 0.1.3
     - MRIQC: 25.0.0rc0
+    - PyNIDM: 5.0.0
     - Base Image: nipreps/mriqc:25.0.0rc0
 
     Usage:
