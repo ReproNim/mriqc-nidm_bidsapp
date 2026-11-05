@@ -46,6 +46,7 @@ from .nidm_converter.nidm_merge import (
     check_iqm_records,
     fix_csv2nidm_types,
     merge_iqms_into_nidm,
+    write_iqm_nidm,
 )
 from .validators import validate_bids_directory, validate_output_directory
 from .nidm_converter.data import get_mriqc_dictionary
@@ -123,7 +124,7 @@ def _write_iqm_nidm(
             source=source_nidm,
         )
     else:
-        shutil.copyfile(iqm_ttl, subject_ttl_file)
+        write_iqm_nidm(iqm_ttl, subject_ttl_file)
 
 
 def _voxel_limit(value: str) -> float:

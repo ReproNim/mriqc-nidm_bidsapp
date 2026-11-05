@@ -10,6 +10,7 @@ one to its image by filename.
 
 import json
 import logging
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -485,6 +486,113 @@ def test_successful_merge_replaces_nidm_ttl_and_leaves_no_temporary(tmp_path, lo
     assert ok is True
     assert sorted(_linked_images(subject_dir / "nidm.ttl")) == [f"{s}.json" for s in stems]
     assert [p.name for p in subject_dir.iterdir() if p.is_file()] == ["nidm.ttl"]
+
+
+@pytest.mark.parametrize("csv2nidm_version", ["4.x", "5.0.0"])
+def test_no_input_nidm_output_names_the_mriqc_prefix(tmp_path, logger, csv2nidm_version):
+    """Without an input NIDM, nidm.ttl is csv2nidm's own graph. csv2nidm 5.0.0
+    names the MRIQC namespace ns1 or mriqc depending on the process's string
+    hash seed (rdflib's Graph.__add__ binds prefixes from a set), and
+    fix_csv2nidm_types does not rewrite its output, so the file came out
+    with ns1: for some runs. Here csv2nidm writes ns1 every time."""
+    from unittest.mock import patch
+
+    output_dir = tmp_path / "out"
+    subject_dir = output_dir / "sub-51209" / "ses-1"
+    stems = ["sub-51209_ses-1_run-1_T1w"]
+    mriqc_dir = _mriqc_tree(subject_dir, stems)
+    jsons = sorted(mriqc_dir.rglob("*.json"))
+    text = iqm_nidm_ttl([str(j) for j in jsons]).replace(
+        "@prefix mriqc: <https://mriqc.readthedocs.io/en/stable/> .",
+        "@prefix ns1: <https://mriqc.readthedocs.io/en/stable/> .",
+    ).replace("mriqc:cjv_x", "ns1:cjv_x")
+    if csv2nidm_version == "5.0.0":
+        # rdf:type and prov:SoftwareAgent already: fix_csv2nidm_types leaves
+        # the file as csv2nidm wrote it.
+        text = text.replace("rdfs:type", "a").replace(
+            "nidm:SoftwareAgent, prov:Agent", "nidm:SoftwareAgent, prov:SoftwareAgent, prov:Agent")
+    assert "mriqc:" not in text
+
+    def csv2nidm(**kwargs):
+        Path(kwargs["output_ttl"]).write_text(text)
+        return True
+
+    with patch("src.run.convert_csv_to_nidm", side_effect=csv2nidm):
+        ok = process_subject(
+            subject_id="51209", bids_dir=tmp_path, output_dir=output_dir,
+            subject_dir=subject_dir, mriqc_dir=mriqc_dir, session_id="1",
+            nidm_input_dir=tmp_path / "no_nidm", skip_mriqc=True,
+            skip_nidm=False, logger=logger,
+        )
+    assert ok is True
+    out = (subject_dir / "nidm.ttl").read_text()
+    assert "@prefix mriqc: <https://mriqc.readthedocs.io/en/stable/> ." in out
+    assert "mriqc:cjv_x" in out
+    assert "ns1:" not in out
+
+
+def _process_with_stub_csv2nidm(tmp_path, logger, **patches):
+    """process_subject on one T1w IQM JSON, without an input NIDM, with
+    csv2nidm replaced by a stub writing a valid IQM graph; returns
+    (ok, subject_dir)."""
+    from unittest.mock import patch
+
+    output_dir = tmp_path / "out"
+    subject_dir = output_dir / "sub-51209" / "ses-1"
+    mriqc_dir = _mriqc_tree(subject_dir, ["sub-51209_ses-1_run-1_T1w"])
+    jsons = sorted(mriqc_dir.rglob("*.json"))
+
+    def csv2nidm(**kwargs):
+        Path(kwargs["output_ttl"]).write_text(iqm_nidm_ttl([str(j) for j in jsons]))
+        return True
+
+    with patch("src.run.convert_csv_to_nidm", side_effect=csv2nidm):
+        with patch.multiple("src.run", **patches) if patches else _nullcontext():
+            ok = process_subject(
+                subject_id="51209", bids_dir=tmp_path, output_dir=output_dir,
+                subject_dir=subject_dir, mriqc_dir=mriqc_dir, session_id="1",
+                nidm_input_dir=tmp_path / "no_nidm", skip_mriqc=True,
+                skip_nidm=False, logger=logger,
+            )
+    return ok, subject_dir
+
+
+def _nullcontext():
+    import contextlib
+    return contextlib.nullcontext()
+
+
+@pytest.mark.parametrize("umask, mode", [(0o022, 0o644), (0o002, 0o664), (0o077, 0o600)])
+def test_nidm_ttl_gets_the_mode_of_a_new_file(tmp_path, logger, umask, mode):
+    """nidm.ttl is written to a mkstemp file, which is created 0600; it must
+    end up with the mode a newly created file gets under the umask, so that
+    under the usual umasks it is readable by the people the derivative is
+    shared with. (Under umask 077 that mode is 0600 too.)"""
+    old = os.umask(umask)
+    try:
+        ok, subject_dir = _process_with_stub_csv2nidm(tmp_path, logger)
+    finally:
+        os.umask(old)
+    assert ok is True
+    assert (subject_dir / "nidm.ttl").stat().st_mode & 0o777 == mode
+
+
+def test_nidm_ttl_is_the_checked_file_renamed_not_a_copy(tmp_path, logger):
+    """The file whose records were checked becomes nidm.ttl by rename
+    (os.replace, atomic), not by copying it, which a reader could see half
+    written."""
+    checked = {}
+
+    def check_and_record(nidm_ttl, json_files):
+        checked["inode"] = Path(nidm_ttl).stat().st_ino
+        checked["path"] = Path(nidm_ttl)
+        return check_iqm_records(nidm_ttl, json_files)
+
+    ok, subject_dir = _process_with_stub_csv2nidm(
+        tmp_path, logger, check_iqm_records=check_and_record)
+    assert ok is True
+    assert checked["path"].name != "nidm.ttl"
+    assert (subject_dir / "nidm.ttl").stat().st_ino == checked["inode"]
 
 
 # Session runs carry only their own session's IQMs.
