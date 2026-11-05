@@ -315,6 +315,35 @@ def test_convert_csv_to_nidm_logs_stderr_of_a_successful_run(tmp_files, caplog):
     ]
 
 
+# The line ontquery logs on stderr whenever csv2nidm loads it without a
+# SciCrunch API key, as it appears in a real run's stderr.
+SCICRUNCH_NOTICE = (
+    "[2026-11-04 10:45:27,911] -  WARNING -       ontquery -      interlex.py:81   - "
+    "You have not set an API key for the SciCrunch API! "
+    "InterLexRemote will error if you try to use it."
+)
+
+
+def test_convert_csv_to_nidm_does_not_relay_the_scicrunch_api_key_notice(tmp_files, caplog):
+    """The app passes -no_concepts, so csv2nidm never queries InterLex and the
+    missing-key notice says nothing about the output; it is logged at DEBUG,
+    and every other stderr line still reaches the log as a warning."""
+    result = subprocess.CompletedProcess(
+        args=["csv2nidm"], returncode=0, stdout="",
+        stderr=SCICRUNCH_NOTICE + "\n/x/csv2nidm.py:1: UserWarning: column foo not mapped\n"
+               "You have not set an API key for the SciCrunch API! and something else\n")
+    logger = logging.getLogger("test_csv2nidm_scicrunch")
+    with caplog.at_level(logging.DEBUG, logger=logger.name):
+        assert _convert_with(tmp_files, logger, return_value=result) is True
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == [
+        "csv2nidm: /x/csv2nidm.py:1: UserWarning: column foo not mapped",
+        "csv2nidm: You have not set an API key for the SciCrunch API! and something else",
+    ]
+    debug = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG]
+    assert any("SciCrunch API! InterLexRemote will error" in m for m in debug)
+
+
 def test_convert_csv_to_nidm_success_without_stderr_logs_no_warning(tmp_files, caplog):
     result = subprocess.CompletedProcess(args=["csv2nidm"], returncode=0, stdout="ok", stderr="")
     logger = logging.getLogger("test_csv2nidm_quiet")

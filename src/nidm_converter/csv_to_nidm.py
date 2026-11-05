@@ -44,6 +44,16 @@ def check_csv2nidm_available() -> bool:
     return shutil.which(CSV2NIDM_TOOL) is not None
 
 
+# csv2nidm stderr lines that are not relayed as warnings. ontquery logs this
+# one whenever it is loaded without a SciCrunch API key; the app passes
+# -no_concepts, so csv2nidm never queries InterLex. Matched as the end of the
+# line (ontquery's log prefix carries a timestamp), on the exact text.
+HARMLESS_STDERR_NOTICES = (
+    "You have not set an API key for the SciCrunch API! "
+    "InterLexRemote will error if you try to use it.",
+)
+
+
 def convert_csv_to_nidm(
     csv_file: Path,
     dictionary_csv: Path,
@@ -188,10 +198,16 @@ def convert_csv_to_nidm(
     if result.stdout:
         logger.debug(f"csv2nidm output: {result.stdout}")
     # A run csv2nidm completes can still report on stderr what it skipped or
-    # could not do; log every line so it reaches the job log.
+    # could not do; log every line so it reaches the job log, except lines
+    # known to say nothing about the output (logged at DEBUG).
     for line in (result.stderr or "").splitlines():
-        if line.strip():
-            logger.warning(f"csv2nidm: {line.strip()}")
+        line = line.strip()
+        if not line:
+            continue
+        if any(line.endswith(notice) for notice in HARMLESS_STDERR_NOTICES):
+            logger.debug(f"csv2nidm: {line}")
+        else:
+            logger.warning(f"csv2nidm: {line}")
 
     return True
 
