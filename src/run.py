@@ -376,9 +376,9 @@ def process_subject(
                     "Pass --session-label to write per-session NIDM instead."
                 )
 
-        # The input NIDM is copied to nidm.ttl and parsed as Turtle, so a
-        # JSON-LD input (the lookup also matches *.jsonld) would fail later
-        # with a Turtle syntax error and leave JSON-LD text named nidm.ttl.
+        # The README asks for Turtle input NIDM, and the lookup also matches
+        # *.jsonld: refuse anything else here, before any conversion, rather
+        # than relying on the merge reading another format by its extension.
         if existing_nidm is not None and existing_nidm.suffix != ".ttl":
             logger.error(
                 f"Input NIDM {existing_nidm} is not Turtle (.ttl); the app reads "

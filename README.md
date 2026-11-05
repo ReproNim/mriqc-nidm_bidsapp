@@ -139,8 +139,11 @@ matches the sibling `freesurfer-nidm` and `fsl-nidm` BIDSapps.
 the per-subject directory: under BABS that directory is what gets zipped and
 shipped, so a copy inside it would be duplicated into every subject's zip.
 
-The app copies existing NIDM files before augmentation, so originals are never
-overwritten.
+An input NIDM file is only read, never written: the app writes the result to a
+temporary file in the subject directory and renames it to `nidm.ttl` only after
+checking that it holds one IQM record per IQM JSON. A job that fails in the
+NIDM conversion therefore writes no `nidm.ttl` (a `nidm.ttl` from an earlier
+run in the same directory is left as it was); see below for when a job fails.
 
 Each image MRIQC rates gets its own record of IQMs in `nidm.ttl`. Besides subject, session, task and run, a record carries the
 image's BIDS `acq`, `ce` and `rec` labels when its filename has them, so two
@@ -242,9 +245,11 @@ agent `prov:SoftwareAgent` (incf-nidash/PyNIDM#457) is not rewritten. csv2nidm
 from PyNIDM 5.0.0, which the image ships, already writes `rdf:type` and types
 the agent `prov:SoftwareAgent`, so with it the rewrite changes nothing.
 
-A job fails (non-zero exit) when an IQM record matches no acquisition or
-several, or when `nidm.ttl` does not end up with exactly one IQM record per
-IQM JSON. When the app runs MRIQC itself, the job also fails when MRIQC exits
+A job fails (non-zero exit), and writes no `nidm.ttl`, when csv2nidm fails,
+when an IQM record matches no acquisition or several, or when the result does
+not hold exactly one IQM record per IQM JSON. An IQM JSON the app cannot read
+also fails the job, but the records of the others are still written. When the
+app runs MRIQC itself, the job also fails when MRIQC exits
 non-zero or no IQM JSON is found for a subject. That subject is not converted
 to NIDM, even if MRIQC wrote some IQM JSONs before failing.
 
