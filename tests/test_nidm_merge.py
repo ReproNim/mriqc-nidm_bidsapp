@@ -635,6 +635,45 @@ def test_input_nidm_in_the_output_directory_is_replaced_not_written(tmp_path, lo
         target.parent.chmod(0o755)
 
 
+def test_successful_run_logs_the_nidm_it_wrote(tmp_path, logger, caplog):
+    with caplog.at_level(logging.INFO):
+        ok, subject_dir = _process_with_stub_csv2nidm(tmp_path, logger)
+    assert ok is True
+    assert f"Created consolidated NIDM: {subject_dir / 'nidm.ttl'}" in caplog.text
+
+
+def test_rerun_that_converts_nothing_says_the_earlier_nidm_is_kept(tmp_path, logger, caplog):
+    """When every IQM JSON of a re-run fails to convert, nothing is written and
+    the earlier run's nidm.ttl stays. The log used to say "Created consolidated
+    NIDM" for that file."""
+    from unittest.mock import patch
+
+    subject_dir = tmp_path / "out" / "sub-51209" / "ses-1"
+    subject_dir.mkdir(parents=True)
+    earlier = subject_dir / "nidm.ttl"
+    earlier.write_text("output of an earlier run")
+    with caplog.at_level(logging.INFO), patch(
+            "src.run.convert_mriqc_json_to_csv", side_effect=ValueError("unreadable")):
+        ok, _ = _process_with_stub_csv2nidm(tmp_path, logger)
+    assert ok is False
+    assert earlier.read_text() == "output of an earlier run"
+    assert "Created consolidated NIDM" not in caplog.text
+    assert f"No NIDM written for sub-51209; {earlier} from an earlier run is left as it was" \
+        in caplog.text
+
+
+def test_run_that_converts_nothing_says_no_nidm_was_written(tmp_path, logger, caplog):
+    from unittest.mock import patch
+
+    with caplog.at_level(logging.INFO), patch(
+            "src.run.convert_mriqc_json_to_csv", side_effect=ValueError("unreadable")):
+        ok, subject_dir = _process_with_stub_csv2nidm(tmp_path, logger)
+    assert ok is False
+    assert not (subject_dir / "nidm.ttl").exists()
+    assert "Created consolidated NIDM" not in caplog.text
+    assert "No NIDM written for sub-51209" in caplog.text
+
+
 @pytest.mark.parametrize("csv2nidm_version", ["4.x", "5.0.0"])
 def test_no_input_nidm_output_names_the_mriqc_prefix(tmp_path, logger, csv2nidm_version):
     """Without an input NIDM, nidm.ttl is csv2nidm's own graph. csv2nidm 5.0.0

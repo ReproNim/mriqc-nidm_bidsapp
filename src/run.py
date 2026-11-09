@@ -525,12 +525,20 @@ def process_subject(
         # Drop the staging tree; it exists only to keep CSVs out of subject_dir.
         shutil.rmtree(staging_dir, ignore_errors=True)
 
-        # Log final output
-        if subject_ttl_file.exists():
+        # Log final output. Only Step 3c writes nidm.ttl, and it ran only when
+        # some IQM JSON was converted; any other nidm.ttl is an earlier run's.
+        if csv_paths:
             size = subject_ttl_file.stat().st_size
             logger.info(
                 f"Created consolidated NIDM: {subject_ttl_file} ({size:,} bytes)"
             )
+        elif subject_ttl_file.exists():
+            logger.warning(
+                f"No NIDM written for sub-{subject_id}; {subject_ttl_file} from an "
+                "earlier run is left as it was"
+            )
+        else:
+            logger.warning(f"No NIDM written for sub-{subject_id}")
 
         if any_scan_failed:
             logger.warning(
