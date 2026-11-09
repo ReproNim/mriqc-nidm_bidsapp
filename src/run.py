@@ -42,6 +42,7 @@ from .nidm_converter import (
     build_subject_output_path,
     NIDM_FILENAME,
 )
+from .check_pynidm import pynidm_installation
 from .nidm_converter.csv_to_nidm import check_csv2nidm_available
 from .nidm_converter.nidm_converter import TEMPORARY_PREFIX
 from .nidm_converter.json_to_csv import combine_iqm_csvs, extract_session_label
@@ -685,6 +686,13 @@ MRIQC Arguments:
             "Install with: pip install pynidm"
         )
         return 1
+    if not args.skip_nidm_conversion:
+        # Once per run: the PyNIDM installed for csv2nidm, and which csv2nidm.
+        pynidm_version, pynidm_location = pynidm_installation()
+        logger.info(
+            f"PyNIDM {pynidm_version} from {pynidm_location}; "
+            f"csv2nidm {shutil.which('csv2nidm')}"
+        )
 
     # Session pinning. BABS session-level jobs always pass --session-label; a
     # subject-level job passes none and everything lands under sub-<id>/.

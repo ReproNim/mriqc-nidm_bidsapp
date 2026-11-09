@@ -40,6 +40,11 @@ RUN micromamba install -n base -y -c conda-forge \
     pip install --no-cache-dir -r requirements.txt && \
     pip install --no-deps -e .
 
+# PyNIDM 5.0.0 must import from this environment's site-packages, and the
+# csv2nidm on PATH must run that same installation; src/check_pynidm.py exits
+# non-zero otherwise. The same check runs in Singularity's %post.
+RUN PYTHONPATH=/opt python /opt/src/check_pynidm.py
+
 # Everything the app reads must be usable by a non-root --user, the same check
 # Singularity runs at the end of %post.
 RUN unreadable="$(find /opt/src /opt/requirements.txt /opt/setup.py /opt/setup.cfg /opt/VERSION \( -type f ! -perm -o=r \) -o \( -type d ! -perm -o=rx \))" && \
