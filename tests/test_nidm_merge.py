@@ -419,6 +419,41 @@ def test_input_nidm_without_the_image_fails_the_subject(tmp_path, logger, caplog
     assert found.read_text() == input_nidm_ttl()
 
 
+@needs_csv2nidm
+def test_failed_csv2nidm_logs_its_cause_first(tmp_path, logger, caplog, monkeypatch):
+    """An IQM without a row in the data dictionary makes the real csv2nidm ask
+    on stdin and fail (EOF under a batch job). The first error logged names
+    that cause, not the SciCrunch API key notice csv2nidm prints on every run."""
+    import subprocess
+
+    run = subprocess.run
+    # stdin at EOF, as under SLURM; a terminal would leave csv2nidm waiting.
+    monkeypatch.setattr("src.nidm_converter.csv_to_nidm.subprocess.run",
+                        lambda *a, **k: run(*a, stdin=subprocess.DEVNULL, **k))
+    output_dir = tmp_path / "out"
+    subject_dir = output_dir / "sub-51209" / "ses-1"
+    mriqc_dir = _mriqc_tree(subject_dir, ["sub-51209_ses-1_run-1_T1w"])
+    json_file = next(mriqc_dir.rglob("*.json"))
+    data = json.loads(json_file.read_text())
+    data["zzz_not_in_the_dictionary"] = 1.5
+    json_file.write_text(json.dumps(data))
+    with caplog.at_level(logging.INFO):
+        ok = process_subject(
+            subject_id="51209", bids_dir=tmp_path, output_dir=output_dir,
+            subject_dir=subject_dir, mriqc_dir=mriqc_dir, session_id="1",
+            nidm_input_dir=tmp_path / "no_nidm", skip_mriqc=True,
+            skip_nidm=False, logger=logger,
+        )
+    assert ok is False
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors, caplog.text
+    assert "EOFError" in errors[0].splitlines()[0], errors[0]
+    assert not any("SciCrunch" in m for m in errors), errors
+    assert not any("SciCrunch" in r.getMessage() for r in caplog.records
+                   if r.levelno >= logging.WARNING)
+    assert not (subject_dir / "nidm.ttl").exists()
+
+
 def test_dropped_iqm_record_fails_the_subject(tmp_path, logger):
     """If csv2nidm writes fewer records than IQM JSONs, the job fails"""
     from unittest.mock import patch

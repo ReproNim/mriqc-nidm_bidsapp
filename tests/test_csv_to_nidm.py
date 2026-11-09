@@ -363,6 +363,62 @@ def test_convert_csv_to_nidm_failure_logs_stdout_and_stderr(tmp_files, caplog):
     assert "Reading CSV" in errors and "Error: Invalid CSV format" in errors
 
 
+TRACEBACK = (
+    "Traceback (most recent call last):\n"
+    '  File "/x/csv2nidm.py", line 300, in main\n'
+    "    answer = input()\n"
+    "EOFError: EOF when reading a line\n"
+)
+
+
+def _failure_records(tmp_files, caplog, error):
+    logger = logging.getLogger("test_csv2nidm_failure_headline")
+    with caplog.at_level(logging.DEBUG, logger=logger.name), \
+            pytest.raises(RuntimeError) as raised:
+        _convert_with(tmp_files, logger, side_effect=error)
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    return str(raised.value), errors
+
+
+def test_csv2nidm_failure_leads_with_the_traceback_not_the_scicrunch_notice(tmp_files, caplog):
+    """csv2nidm writes the SciCrunch notice to stderr on every run, so a
+    failure's stderr starts with it; the cause is the traceback's last line."""
+    error = subprocess.CalledProcessError(
+        returncode=1, cmd=["csv2nidm"], output="json_key=cjv, column=cjv\n",
+        stderr=SCICRUNCH_NOTICE + "\n" + TRACEBACK)
+    message, errors = _failure_records(tmp_files, caplog, error)
+    assert message.splitlines()[0] == "csv2nidm failed: EOFError: EOF when reading a line"
+    assert "SciCrunch" not in message
+    assert "EOFError: EOF when reading a line" in errors[0]
+    assert not any("SciCrunch" in m for m in errors), errors
+    # The whole traceback and stdout still reach the log.
+    assert any('File "/x/csv2nidm.py", line 300' in m for m in errors)
+    assert any("json_key=cjv" in m for m in errors)
+
+
+def test_csv2nidm_failure_reported_on_stdout_leads_the_message(tmp_files, caplog):
+    """csv2nidm prints some of its errors to stdout and exits; stderr then
+    holds only the notice, which used to be the whole error message."""
+    error = subprocess.CalledProcessError(
+        returncode=1, cmd=["csv2nidm"],
+        output="Reading CSV\nERROR: column zzz has no entry in the data dictionary\n",
+        stderr=SCICRUNCH_NOTICE + "\n")
+    message, errors = _failure_records(tmp_files, caplog, error)
+    assert message.splitlines()[0] == (
+        "csv2nidm failed: ERROR: column zzz has no entry in the data dictionary")
+    assert "SciCrunch" not in message
+    assert "column zzz" in errors[0]
+    assert not any("SciCrunch" in m for m in errors), errors
+
+
+def test_csv2nidm_failure_without_output_names_the_exit_status(tmp_files, caplog):
+    error = subprocess.CalledProcessError(
+        returncode=3, cmd=["csv2nidm"], output="", stderr=SCICRUNCH_NOTICE + "\n")
+    message, errors = _failure_records(tmp_files, caplog, error)
+    assert message.splitlines()[0] == "csv2nidm failed: exit status 3, no error message"
+    assert not any("SciCrunch" in m for m in errors), errors
+
+
 def test_convert_csv_to_nidm_timeout(tmp_files, mock_logger):
     """Test error when csv2nidm execution times out."""
     with patch("shutil.which", return_value="/usr/bin/csv2nidm"), patch(
