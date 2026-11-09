@@ -118,6 +118,14 @@ def test_post_runs_every_install_without_failures(post, shell):
         assert any(c.startswith(install) for c in calls), (install, calls)
 
 
+def test_post_checks_pynidm_after_the_last_install(post):
+    """The check must see the finished environment: after every pip install."""
+    _, calls = post("/bin/sh", fail_at=0)
+    check = calls.index("python OPT/src/check_pynidm.py")
+    installs = [i for i, c in enumerate(calls) if c.startswith("pip install")]
+    assert installs and check > max(installs), calls
+
+
 @pytest.mark.parametrize("shell", _shells())
 def test_any_failing_command_fails_post(post, shell):
     _, calls = post(shell, fail_at=0)
@@ -245,6 +253,21 @@ def test_build_check_examines_the_run_time_csv2nidm(image_env, post):
     shadow.write_text(f"#!{other}\nimport nidm\n")
     shadow.chmod(0o755)
     _check_stops_post(*image_env["run"](), f"{shadow} runs nidm from")
+
+
+def test_build_check_fails_when_nidm_is_not_pynidms_files(image_env):
+    """A nidm package left in site-packages while the pynidm 5.0.0 metadata
+    lives in another directory (here one a .pth file adds): the nidm that
+    imports is not the installed distribution's."""
+    site_dir = image_env["site"]
+    shutil.rmtree(site_dir / "pynidm-5.0.0.dist-info")
+    extra = image_env["tmp"] / "extra-site"
+    extra.mkdir()
+    info = extra / "pynidm-5.0.0.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text("Metadata-Version: 2.1\nName: pynidm\nVersion: 5.0.0\n")
+    (site_dir / "extra.pth").write_text(f"{extra}\n")
+    _check_stops_post(*image_env["run"](), "not from pynidm's")
 
 
 def test_build_check_fails_without_csv2nidm(image_env):
