@@ -343,14 +343,29 @@ SES1_STEMS = [
 ]
 
 
+def _assert_clean_mriqc_output(ttl: Path, caplog):
+    """The IQM properties are under the mriqc prefix, and a clean run logs no
+    warning (csv2nidm's SciCrunch notice included)."""
+    text = ttl.read_text()
+    assert "@prefix mriqc: <https://mriqc.readthedocs.io/en/stable/> ." in text
+    assert "mriqc:cjv" in text
+    assert "ns1:" not in text
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
 @needs_csv2nidm
-def test_no_input_nidm_keeps_every_iqm_record(tmp_path, logger):
+def test_no_input_nidm_keeps_every_iqm_record(tmp_path, logger, caplog, monkeypatch):
     """Every IQM JSON of the job becomes a record, not only the first"""
+    # csv2nidm 5.0.0 names the MRIQC namespace ns1 under this seed; the child
+    # inherits it through subprocess.run's environment.
+    monkeypatch.setenv("PYTHONHASHSEED", "1")
     stems = SES1_STEMS + ["sub-51209_ses-1_run-2_T1w"]
-    ok, ttl = _run(tmp_path, stems, tmp_path / "no_nidm", logger)
+    with caplog.at_level(logging.DEBUG):
+        ok, ttl = _run(tmp_path, stems, tmp_path / "no_nidm", logger)
 
     assert ok is True
     assert sorted(_linked_images(ttl)) == sorted(f"{s}.json" for s in stems)
+    _assert_clean_mriqc_output(ttl, caplog)
 
 
 def _subject_nodes(ttl: Path):
@@ -379,13 +394,17 @@ def _subject_nodes(ttl: Path):
 
 
 @needs_csv2nidm
-def test_input_nidm_links_t1w_to_its_own_acquisition(tmp_path, logger):
+def test_input_nidm_links_t1w_to_its_own_acquisition(tmp_path, logger, caplog, monkeypatch):
     """UCLA_Long layout: per-session input, T1w never linked to BOLD"""
+    monkeypatch.setenv("PYTHONHASHSEED", "1")
     nidm_dir = tmp_path / "nidm"
-    _write(nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl", input_nidm_ttl())
-    ok, ttl = _run(tmp_path, SES1_STEMS, nidm_dir, logger)
+    found = _write(nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl", input_nidm_ttl())
+    with caplog.at_level(logging.DEBUG):
+        ok, ttl = _run(tmp_path, SES1_STEMS, nidm_dir, logger)
 
     assert ok is True
+    _assert_clean_mriqc_output(ttl, caplog)
+    assert found.read_text() == input_nidm_ttl()
     links = _linked_images(ttl)
     assert {k: v for k, v in links.items() if k in
             {f"{s}.json" for s in SES1_STEMS}} == {
@@ -495,9 +514,11 @@ def test_failed_csv2nidm_with_input_nidm_leaves_no_nidm_ttl(tmp_path, logger):
     assert [p.name for p in ttl.parent.iterdir() if p.is_file()] == []
 
 
-def test_successful_merge_replaces_nidm_ttl_and_leaves_no_temporary(tmp_path, logger):
-    """The merged graph is written to a temporary file beside nidm.ttl and
-    renamed into place."""
+@pytest.mark.parametrize("with_input", [False, True], ids=["no_input", "input_nidm"])
+def test_successful_merge_replaces_nidm_ttl_and_leaves_no_temporary(tmp_path, logger, with_input):
+    """The result, csv2nidm's graph or (with an input NIDM) the merged graph,
+    is written to a temporary file beside nidm.ttl and renamed over the
+    earlier run's nidm.ttl."""
     from unittest.mock import patch
 
     output_dir = tmp_path / "out"
@@ -506,6 +527,9 @@ def test_successful_merge_replaces_nidm_ttl_and_leaves_no_temporary(tmp_path, lo
     mriqc_dir = _mriqc_tree(subject_dir, stems)
     jsons = sorted(mriqc_dir.rglob("*.json"))
     subject_dir.joinpath("nidm.ttl").write_text("stale output of an earlier run")
+    nidm_input_dir = tmp_path / ("nidm" if with_input else "no_nidm")
+    if with_input:
+        _write(nidm_input_dir / "sub-51209" / "ses-1" / "nidm.ttl", input_nidm_ttl())
 
     def csv2nidm(**kwargs):
         Path(kwargs["output_ttl"]).write_text(iqm_nidm_ttl([str(j) for j in jsons]))
@@ -515,11 +539,14 @@ def test_successful_merge_replaces_nidm_ttl_and_leaves_no_temporary(tmp_path, lo
         ok = process_subject(
             subject_id="51209", bids_dir=tmp_path, output_dir=output_dir,
             subject_dir=subject_dir, mriqc_dir=mriqc_dir, session_id="1",
-            nidm_input_dir=tmp_path / "no_nidm", skip_mriqc=True,
+            nidm_input_dir=nidm_input_dir, skip_mriqc=True,
             skip_nidm=False, logger=logger,
         )
     assert ok is True
-    assert sorted(_linked_images(subject_dir / "nidm.ttl")) == [f"{s}.json" for s in stems]
+    links = _linked_images(subject_dir / "nidm.ttl")
+    assert sorted(links) == [f"{s}.json" for s in stems]
+    # Merged: each record uses its acquisition from the input NIDM.
+    assert links == {f"{s}.json": [f"{s}.nii.gz"] if with_input else [] for s in stems}
     assert [p.name for p in subject_dir.iterdir() if p.is_file()] == ["nidm.ttl"]
 
 
