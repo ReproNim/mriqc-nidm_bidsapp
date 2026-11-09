@@ -199,8 +199,12 @@ def convert_csv_to_nidm(
 
     # Execute csv2nidm
     try:
+        # stdin at EOF: csv2nidm asks on stdin about a column missing from the
+        # data dictionary, and from a terminal it would wait for an answer
+        # until the timeout instead of failing.
         result = subprocess.run(
-            cmd, capture_output=True, text=True, check=True, timeout=TIMEOUT_SECONDS
+            cmd, capture_output=True, text=True, check=True, timeout=TIMEOUT_SECONDS,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired as e:
         logger.error(f"csv2nidm timed out after {TIMEOUT_SECONDS} seconds")

@@ -443,12 +443,6 @@ def test_failed_csv2nidm_logs_its_cause_first(tmp_path, logger, caplog, monkeypa
     """An IQM without a row in the data dictionary makes the real csv2nidm ask
     on stdin and fail (EOF under a batch job). The first error logged names
     that cause, not the SciCrunch API key notice csv2nidm prints on every run."""
-    import subprocess
-
-    run = subprocess.run
-    # stdin at EOF, as under SLURM; a terminal would leave csv2nidm waiting.
-    monkeypatch.setattr("src.nidm_converter.csv_to_nidm.subprocess.run",
-                        lambda *a, **k: run(*a, stdin=subprocess.DEVNULL, **k))
     output_dir = tmp_path / "out"
     subject_dir = output_dir / "sub-51209" / "ses-1"
     mriqc_dir = _mriqc_tree(subject_dir, ["sub-51209_ses-1_run-1_T1w"])
@@ -471,6 +465,79 @@ def test_failed_csv2nidm_logs_its_cause_first(tmp_path, logger, caplog, monkeypa
     assert not any("SciCrunch" in r.getMessage() for r in caplog.records
                    if r.levelno >= logging.WARNING)
     assert not (subject_dir / "nidm.ttl").exists()
+
+
+UNMAPPED_IQM_RUN = """
+import json, logging, sys
+from pathlib import Path
+from src.run import process_subject
+from tests.test_nidm_merge import _mriqc_tree
+
+logging.basicConfig(level=logging.ERROR, format="%(levelname)s %(message)s")
+work = Path(sys.argv[1])
+subject_dir = work / "out" / "sub-51209" / "ses-1"
+mriqc_dir = _mriqc_tree(subject_dir, ["sub-51209_ses-1_run-1_T1w"])
+json_file = next(mriqc_dir.rglob("*.json"))
+data = json.loads(json_file.read_text())
+data["zzz_not_in_the_dictionary"] = 1.5
+json_file.write_text(json.dumps(data))
+ok = process_subject(
+    subject_id="51209", bids_dir=work, output_dir=work / "out",
+    subject_dir=subject_dir, mriqc_dir=mriqc_dir, session_id="1",
+    nidm_input_dir=work / "no_nidm", skip_mriqc=True, skip_nidm=False,
+    logger=logging.getLogger("unmapped"))
+sys.exit(0 if ok else 1)
+"""
+
+
+@needs_csv2nidm
+def test_csv2nidm_never_reads_the_apps_stdin(tmp_path):
+    """csv2nidm asks on stdin for an IQM missing from the data dictionary. It
+    used to inherit the app's stdin, so from a terminal (here: a pipe nobody
+    writes to or closes) it waited until the 300 s timeout. It must fail at
+    once with the EOFError, whatever the app's stdin is."""
+    import os
+    import signal
+    import subprocess
+
+    root = Path(__file__).resolve().parent.parent
+    log = tmp_path / "child.log"
+    with open(log, "w") as out:
+        child = subprocess.Popen(
+            [sys.executable, "-c", UNMAPPED_IQM_RUN, str(tmp_path)],
+            cwd=root, stdin=subprocess.PIPE, stdout=out, stderr=out,
+            start_new_session=True)
+    try:
+        child.wait(timeout=120)
+    except subprocess.TimeoutExpired:
+        pass
+    finally:
+        if child.poll() is None:
+            os.killpg(child.pid, signal.SIGKILL)
+            child.wait()
+            pytest.fail("csv2nidm waited on the app's stdin: " + log.read_text()[-2000:])
+        child.stdin.close()
+    assert child.returncode == 1, log.read_text()[-3000:]
+    errors = [line for line in log.read_text().splitlines() if line.startswith("ERROR")]
+    assert errors and "EOFError" in errors[0], log.read_text()[-3000:]
+
+
+def test_csv2nidm_is_started_with_stdin_at_eof(tmp_path):
+    from src.nidm_converter.csv_to_nidm import convert_csv_to_nidm
+
+    for name in ("iqms.csv", "dictionary.csv", "software.csv"):
+        (tmp_path / name).write_text("x\n")
+    import subprocess
+    from unittest.mock import patch
+
+    done = subprocess.CompletedProcess(
+        args=["csv2nidm"], returncode=0, stdout="", stderr="")
+    with patch("shutil.which", return_value="/usr/bin/csv2nidm"), \
+            patch("subprocess.run", return_value=done) as run:
+        convert_csv_to_nidm(
+            csv_file=tmp_path / "iqms.csv", dictionary_csv=tmp_path / "dictionary.csv",
+            software_metadata_csv=tmp_path / "software.csv", output_ttl=tmp_path / "o.ttl")
+    assert run.call_args.kwargs.get("stdin") is subprocess.DEVNULL
 
 
 def test_dropped_iqm_record_fails_the_subject(tmp_path, logger):
