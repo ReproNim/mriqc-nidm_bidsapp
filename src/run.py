@@ -13,12 +13,14 @@ Follows BIDS Apps specification and patterns from freesurfer_bidsapp.
 """
 
 import argparse
+import contextlib
 import json
 import logging
 import math
 import os
 import re
 import shutil
+import signal
 import sys
 import tempfile
 from pathlib import Path
@@ -41,6 +43,7 @@ from .nidm_converter import (
     NIDM_FILENAME,
 )
 from .nidm_converter.csv_to_nidm import check_csv2nidm_available
+from .nidm_converter.nidm_converter import TEMPORARY_PREFIX
 from .nidm_converter.json_to_csv import combine_iqm_csvs, extract_session_label
 from .nidm_converter.nidm_merge import (
     check_iqm_records,
@@ -70,6 +73,34 @@ def _cleanup_nidm_intermediates(subject_dir: Path, logger: logging.Logger) -> No
                 logger.debug(f"Removed NIDM intermediate: {leftover.name}")
             except OSError as e:
                 logger.warning(f"Could not remove {leftover}: {e}")
+
+
+def _remove_interrupted_temporaries(subject_dir: Path, logger: logging.Logger) -> None:
+    """Delete the temporary nidm.ttl a run killed while converting left in
+    subject_dir (SIGKILL, a node failure), before this run converts."""
+    for leftover in sorted(subject_dir.glob(f"{TEMPORARY_PREFIX}*.ttl")):
+        logger.warning(
+            f"Removing {leftover.name}, a temporary NIDM file left by an interrupted run"
+        )
+        leftover.unlink(missing_ok=True)
+
+
+@contextlib.contextmanager
+def _exit_on_sigterm():
+    """Raise SystemExit(143) on SIGTERM while active, so finally blocks run;
+    Python's default SIGTERM action ends the process without them."""
+    def _raise(signum, frame):
+        raise SystemExit(128 + signum)
+
+    try:
+        previous = signal.signal(signal.SIGTERM, _raise)
+    except ValueError:  # not the main thread; leave SIGTERM alone
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def _write_iqm_nidm(
@@ -391,6 +422,7 @@ def process_subject(
         # results, and is ALWAYS named nidm.ttl -- subject identity is carried by
         # the directory, not the filename.
         subject_dir.mkdir(parents=True, exist_ok=True)
+        _remove_interrupted_temporaries(subject_dir, logger)
         subject_ttl_file = subject_dir / NIDM_FILENAME
         logger.debug(f"Target NIDM file: {subject_ttl_file}")
 
@@ -435,41 +467,51 @@ def process_subject(
 
         # Step 3c: One csv2nidm call for all IQM rows of this job, attached
         # to the input NIDM when there is one (see _write_iqm_nidm).
+        # From the temporary file's creation to its rename into nidm.ttl, it is
+        # removed on any exit: a failed conversion, an exception, Ctrl-C, or
+        # SIGTERM (a time limit, scancel), which is turned into SystemExit for
+        # this stretch so the cleanup runs (subprocess.run then also kills
+        # csv2nidm).
         if csv_paths:
-            fd, tmp_name = tempfile.mkstemp(prefix=".nidm.", suffix=".ttl", dir=subject_dir)
-            os.close(fd)
-            pending_ttl = Path(tmp_name)
-            try:
+            with _exit_on_sigterm():
+                pending_ttl = None
                 try:
-                    _write_iqm_nidm(
-                        csv_paths=csv_paths,
-                        software_csv_path=software_csv_path,
-                        dictionary_csv=dictionary_csv,
-                        staging_dir=staging_dir,
-                        augmentation_target=augmentation_target,
-                        subject_ttl_file=pending_ttl,
-                        logger=logger,
-                        source_nidm=existing_nidm,
+                    fd, tmp_name = tempfile.mkstemp(
+                        prefix=TEMPORARY_PREFIX, suffix=".ttl", dir=subject_dir
                     )
-                except Exception as e:
-                    logger.error(f"Error during NIDM conversion: {e}")
-                    return False
+                    pending_ttl = Path(tmp_name)
+                    os.close(fd)
+                    try:
+                        _write_iqm_nidm(
+                            csv_paths=csv_paths,
+                            software_csv_path=software_csv_path,
+                            dictionary_csv=dictionary_csv,
+                            staging_dir=staging_dir,
+                            augmentation_target=augmentation_target,
+                            subject_ttl_file=pending_ttl,
+                            logger=logger,
+                            source_nidm=existing_nidm,
+                        )
+                    except Exception as e:
+                        logger.error(f"Error during NIDM conversion: {e}")
+                        return False
 
-                # Step 3d: Every converted IQM JSON must be exactly one record.
-                problems = check_iqm_records(pending_ttl, converted_jsons)
-                if problems:
-                    logger.error(
-                        f"The NIDM written for sub-{subject_id} does not hold one "
-                        "MRIQC record per IQM JSON: " + "; ".join(problems)
-                    )
-                    return False
-                # mkstemp makes the file private; give it the mode a new file gets
-                umask = os.umask(0)
-                os.umask(umask)
-                os.chmod(pending_ttl, 0o666 & ~umask)
-                os.replace(pending_ttl, subject_ttl_file)
-            finally:
-                pending_ttl.unlink(missing_ok=True)
+                    # Step 3d: Every converted IQM JSON must be exactly one record.
+                    problems = check_iqm_records(pending_ttl, converted_jsons)
+                    if problems:
+                        logger.error(
+                            f"The NIDM written for sub-{subject_id} does not hold one "
+                            "MRIQC record per IQM JSON: " + "; ".join(problems)
+                        )
+                        return False
+                    # mkstemp makes the file private; give it the mode a new file gets
+                    umask = os.umask(0)
+                    os.umask(umask)
+                    os.chmod(pending_ttl, 0o666 & ~umask)
+                    os.replace(pending_ttl, subject_ttl_file)
+                finally:
+                    if pending_ttl is not None:
+                        pending_ttl.unlink(missing_ok=True)
             logger.info(
                 f"Wrote {len(converted_jsons)} MRIQC IQM record(s) to "
                 f"{subject_ttl_file.name}"

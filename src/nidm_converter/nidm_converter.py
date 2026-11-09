@@ -24,6 +24,11 @@ from typing import List, Optional
 # Module-level constant for supported NIDM file extensions
 SUPPORTED_NIDM_EXTENSIONS = [".ttl", ".jsonld", ".json-ld"]
 
+# The app writes nidm.ttl through <subject dir>/.nidm.XXXX.ttl (src/run.py).
+# One left by a killed run is not an input NIDM, also when the NIDM input
+# directory is the output directory.
+TEMPORARY_PREFIX = ".nidm."
+
 
 def _search_nidm_in_directory(
     search_dir: Path, logger: Optional[logging.Logger] = None
@@ -62,7 +67,10 @@ def _search_nidm_in_directory(
     # Search for other NIDM formats in order of preference
     # Sort results for deterministic behavior across filesystems
     for ext in SUPPORTED_NIDM_EXTENSIONS:
-        files = sorted(search_dir.glob(f"*{ext}"))
+        files = sorted(
+            f for f in search_dir.glob(f"*{ext}")
+            if not f.name.startswith(TEMPORARY_PREFIX)
+        )
         if files:
             logger.info(f"Found existing NIDM ({ext.lstrip('.')}): {files[0]}")
             return files[0]

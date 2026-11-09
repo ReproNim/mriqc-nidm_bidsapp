@@ -671,6 +671,133 @@ def test_nidm_ttl_is_the_checked_file_renamed_not_a_copy(tmp_path, logger):
     assert (subject_dir / "nidm.ttl").stat().st_ino == checked["inode"]
 
 
+def test_a_temporary_left_by_an_interrupted_run_is_removed(tmp_path, logger):
+    """A run killed while converting leaves its `.nidm.XXXX.ttl` in the subject
+    directory, which ships with it. The next conversion removes it first."""
+    subject_dir = tmp_path / "out" / "sub-51209" / "ses-1"
+    subject_dir.mkdir(parents=True)
+    stale = subject_dir / ".nidm.k1ll3d00.ttl"
+    stale.write_text("")
+    ok, subject_dir = _process_with_stub_csv2nidm(tmp_path, logger)
+    assert ok is True
+    assert not stale.exists()
+    assert [p.name for p in subject_dir.iterdir() if p.is_file()] == ["nidm.ttl"]
+
+
+def test_start_cleanup_removes_only_hidden_nidm_temporaries(tmp_path, logger):
+    """The cleanup deletes `.nidm.*.ttl` in the subject directory and nothing
+    else: never nidm.ttl, other .ttl files, files in subdirectories (MRIQC's
+    tree), or a symlink's target."""
+    from src.run import _remove_interrupted_temporaries
+
+    subject_dir = tmp_path / "sub-51209"
+    (subject_dir / "mriqc").mkdir(parents=True)
+    outside = tmp_path / "outside.ttl"
+    outside.write_text("keep")
+    temporaries = [subject_dir / ".nidm.k1ll3d00.ttl", subject_dir / ".nidm.0rphan00.ttl"]
+    for path in temporaries:
+        path.write_text("temporary")
+    link = subject_dir / ".nidm.l1nk0000.ttl"
+    link.symlink_to(outside)
+    kept = [subject_dir / name for name in
+            ("nidm.ttl", ".nidmnotes.ttl", "sub-51209.ttl", "nidm.ttl.bak", ".nidm.ttl.keep")]
+    kept.append(subject_dir / "mriqc" / ".nidm.nested00.ttl")
+    for path in kept:
+        path.write_text("keep")
+
+    _remove_interrupted_temporaries(subject_dir, logger)
+
+    assert not any(p.exists() or p.is_symlink() for p in temporaries + [link])
+    assert all(p.read_text() == "keep" for p in kept + [outside])
+
+
+@pytest.mark.parametrize("previous", ["default", "ignore", "function"])
+def test_sigterm_handler_is_restored_after_conversion(previous):
+    """_exit_on_sigterm installs its handler only for the conversion and puts
+    back whatever was there before, also when the block raises."""
+    import signal
+    from src.run import _exit_on_sigterm
+
+    def custom(signum, frame):
+        pass
+
+    before = {"default": signal.SIG_DFL, "ignore": signal.SIG_IGN, "function": custom}[previous]
+    saved = signal.signal(signal.SIGTERM, before)
+    try:
+        with _exit_on_sigterm():
+            assert signal.getsignal(signal.SIGTERM) is not before
+        assert signal.getsignal(signal.SIGTERM) is before
+        with pytest.raises(RuntimeError):
+            with _exit_on_sigterm():
+                raise RuntimeError("conversion failed")
+        assert signal.getsignal(signal.SIGTERM) is before
+    finally:
+        signal.signal(signal.SIGTERM, saved)
+
+
+SIGTERMED_RUN = """
+import logging, signal, subprocess, sys
+# SIGTERM's disposition is inherited; start from the default a batch job has.
+signal.signal(signal.SIGTERM, signal.SIG_DFL)
+from pathlib import Path
+from unittest.mock import patch
+from src.run import process_subject
+from tests.test_nidm_merge import _mriqc_tree
+
+work, ready = Path(sys.argv[1]), Path(sys.argv[2])
+subject_dir = work / "out" / "sub-51209" / "ses-1"
+mriqc_dir = _mriqc_tree(subject_dir, ["sub-51209_ses-1_run-1_T1w"])
+
+def csv2nidm_that_runs_long(**kwargs):
+    assert list(subject_dir.glob(".nidm.*.ttl"))
+    ready.write_text("converting")
+    subprocess.run(["sleep", "60"], check=True)
+    raise AssertionError("SIGTERM did not interrupt the conversion")
+
+with patch("src.run.convert_csv_to_nidm", side_effect=csv2nidm_that_runs_long):
+    process_subject(
+        subject_id="51209", bids_dir=work, output_dir=work / "out",
+        subject_dir=subject_dir, mriqc_dir=mriqc_dir, session_id="1",
+        nidm_input_dir=work / "no_nidm", skip_mriqc=True, skip_nidm=False,
+        logger=logging.getLogger("sigterm"))
+"""
+
+
+def test_sigterm_during_conversion_leaves_no_temporary(tmp_path):
+    """SIGTERM (a SLURM time limit, scancel) used to end the app without
+    cleanup, leaving `.nidm.XXXX.ttl` in the subject directory. A child
+    process gets SIGTERM while it waits on a real subprocess in the
+    conversion; it must exit 143 and leave no file in the subject directory."""
+    import signal
+    import subprocess
+    import time
+
+    root = Path(__file__).resolve().parent.parent
+    ready = tmp_path / "ready"
+    log = tmp_path / "child.log"
+    # Output to a file, not a pipe: a `sleep` orphaned by the old behaviour
+    # would hold a pipe open.
+    with open(log, "w") as out:
+        child = subprocess.Popen(
+            [sys.executable, "-c", SIGTERMED_RUN, str(tmp_path), str(ready)],
+            cwd=root, stdin=subprocess.DEVNULL, stdout=out, stderr=out)
+    try:
+        deadline = time.monotonic() + 120
+        while not ready.exists():
+            assert child.poll() is None, log.read_text()[-3000:]
+            assert time.monotonic() < deadline, "the child never started converting"
+            time.sleep(0.1)
+        child.send_signal(signal.SIGTERM)
+        child.wait(timeout=60)
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+    assert child.returncode == 143, (child.returncode, log.read_text()[-3000:])
+    subject_dir = tmp_path / "out" / "sub-51209" / "ses-1"
+    assert [p.name for p in subject_dir.iterdir() if p.is_file()] == []
+
+
 # Session runs carry only their own session's IQMs.
 def _bids_dir(root: Path) -> Path:
     root.mkdir(parents=True, exist_ok=True)

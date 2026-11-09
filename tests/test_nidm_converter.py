@@ -340,3 +340,23 @@ def test_detect_existing_nidm_session_via_bids_convention(tmp_path, logger):
         subject_id="01", bids_dir=bids, session_id="2", logger=logger
     )
     assert result == wanted
+
+
+# The app writes nidm.ttl through a temporary `.nidm.XXXX.ttl` in the subject
+# directory. One left by a killed run is never an input NIDM, also when the
+# NIDM input directory is the output directory.
+def test_detect_existing_nidm_ignores_a_temporary_nidm_file(tmp_path, logger):
+    _touch(tmp_path / "sub-01" / ".nidm.k1ll3d00.ttl")
+    assert detect_existing_nidm(
+        subject_id="01", nidm_input_dir=tmp_path, logger=logger) is None
+
+    wanted = _touch(tmp_path / "sub-01" / "sub-01.ttl")
+    assert detect_existing_nidm(
+        subject_id="01", nidm_input_dir=tmp_path, logger=logger) == wanted
+
+
+def test_detect_existing_nidm_ignores_a_temporary_before_the_dataset_file(tmp_path, logger):
+    _touch(tmp_path / "sub-01" / ".nidm.k1ll3d00.ttl")
+    wanted = _touch(tmp_path / "nidm.ttl")
+    assert detect_existing_nidm(
+        subject_id="01", nidm_input_dir=tmp_path, logger=logger) == wanted
