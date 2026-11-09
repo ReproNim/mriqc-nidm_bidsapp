@@ -566,6 +566,47 @@ def test_no_input_nidm_output_names_the_mriqc_prefix(tmp_path, logger, csv2nidm_
     assert "ns1:" not in out
 
 
+SEEDED_RUN = """
+import logging, sys
+from pathlib import Path
+from tests.nidm_fixtures import input_nidm_ttl
+from tests.test_nidm_merge import SES1_STEMS, _run, _write
+work, with_input = Path(sys.argv[1]), sys.argv[2] == "1"
+if with_input:
+    _write(work / "nidm" / "sub-51209" / "ses-1" / "nidm.ttl", input_nidm_ttl())
+ok, _ = _run(work, SES1_STEMS, work / "nidm", logging.getLogger("seeded"))
+sys.exit(0 if ok else 1)
+"""
+
+
+@needs_csv2nidm
+@pytest.mark.parametrize("with_input", [False, True], ids=["no_input", "input_nidm"])
+def test_nidm_ttl_prefixes_do_not_depend_on_the_hash_seed(tmp_path, with_input):
+    """rdflib binds prefixes from a set when graphs are combined, so the
+    prefix a namespace gets in csv2nidm's output, and in the app's merge,
+    depends on the string hash seed: http://purl.org/dc/dcmitype/ came out as
+    dcmitype in one run and dctypes in the next. Seeds 0 and 1 gave the two
+    names. The whole @prefix block must be the same for both, end to end
+    with the real csv2nidm (the child's seed reaches csv2nidm too)."""
+    import subprocess
+
+    root = Path(__file__).resolve().parent.parent
+    blocks = {}
+    for seed in ("0", "1"):
+        work = tmp_path / f"seed{seed}"
+        work.mkdir()
+        result = subprocess.run(
+            [sys.executable, "-c", SEEDED_RUN, str(work), "1" if with_input else "0"],
+            cwd=root, env=dict(os.environ, PYTHONHASHSEED=seed),
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=600)
+        assert result.returncode == 0, result.stderr[-3000:]
+        text = (work / "out" / "sub-51209" / "ses-1" / "nidm.ttl").read_text()
+        blocks[seed] = [line for line in text.splitlines() if line.startswith("@prefix")]
+    assert blocks["0"] == blocks["1"]
+    assert "@prefix dcmitype: <http://purl.org/dc/dcmitype/> ." in blocks["0"]
+    assert "@prefix mriqc: <https://mriqc.readthedocs.io/en/stable/> ." in blocks["0"]
+
+
 def _process_with_stub_csv2nidm(tmp_path, logger, **patches):
     """process_subject on one T1w IQM JSON, without an input NIDM, with
     csv2nidm replaced by a stub writing a valid IQM graph; returns

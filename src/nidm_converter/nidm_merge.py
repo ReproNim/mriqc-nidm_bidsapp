@@ -37,6 +37,10 @@ SIO = Namespace("http://semanticscience.org/ontology/sio.owl#")
 # puts last wins, so the same input gives ns1: or mriqc: from run to run.
 # Every graph the app writes goes through serialize_nidm, which binds mriqc.
 MRIQC = Namespace("https://mriqc.readthedocs.io/en/stable/")
+# Bound by bidsmri2nidm as dcmitype; rdflib combines graphs' bindings from a
+# set, so csv2nidm's output and the merge named it dcmitype or dctypes
+# depending on the string hash seed.
+DCMITYPE = Namespace("http://purl.org/dc/dcmitype/")
 # csv2nidm writes rdfs:type (not a term of the closed RDFS namespace) on the
 # entities of a new file.
 RDFS_TYPE = URIRef(str(RDFS) + "type")
@@ -120,8 +124,12 @@ def fix_csv2nidm_types(ttl: Path) -> int:
 
 def serialize_nidm(graph: Graph, destination: Path) -> None:
     """Write graph to destination as Turtle, the IQM properties' namespace
-    named mriqc whatever prefix the graph had bound to it."""
+    named mriqc and the DCMI types namespace dcmitype, whatever prefixes the
+    graph had bound to them: rdflib picks between two prefixes for one
+    namespace by the string hash seed, so the same run would otherwise write
+    different text."""
     graph.bind("mriqc", MRIQC, override=True, replace=True)
+    graph.bind("dcmitype", DCMITYPE, override=True, replace=True)
     graph.serialize(destination=str(destination), format="turtle")
 
 
