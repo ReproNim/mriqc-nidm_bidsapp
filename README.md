@@ -145,7 +145,13 @@ to a temporary file in the subject directory and renames it to `nidm.ttl`
 When the NIDM input directory is the output directory, the input found is the
 subject's `nidm.ttl` itself, and that rename replaces it with the new file; if
 it was a symlink (e.g. a git-annex file in a datalad dataset), the link is
-replaced and the file it pointed to is left as it was. A job that fails in
+replaced and the file it pointed to is left as it was. That works once: a
+re-run in this layout fails, because its input is then the earlier run's
+output, which already holds this app's IQM records, and the record check finds
+two records per IQM JSON (`... 2 records in NIDM`). Keep the input NIDM in a
+directory of its own (`<bids_dir>/../NIDM` or `--nidm-input-dir`) and write the
+output elsewhere; to re-run in place, first put the original input NIDM back
+as `nidm.ttl`. A job that fails in
 csv2nidm, in linking the IQM records to the input NIDM, or in the record check
 writes no `nidm.ttl` (a `nidm.ttl` from an earlier run in the same directory
 is left as it was). When only some IQM JSONs cannot be read, the records of

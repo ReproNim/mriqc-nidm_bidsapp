@@ -741,6 +741,25 @@ def test_run_that_converts_nothing_says_no_nidm_was_written(tmp_path, logger, ca
     assert "No NIDM written for sub-51209" in caplog.text
 
 
+@needs_csv2nidm
+def test_rerun_with_the_output_directory_as_nidm_input_fails(tmp_path, logger, caplog):
+    """README: with the NIDM input directory set to the output directory, a
+    re-run reads the first run's nidm.ttl, which already holds the IQM
+    records, and fails the record check. The earlier nidm.ttl is kept. (A
+    stub csv2nidm hides this: its record IRIs are the same on every run.)"""
+    output_dir = tmp_path / "out"
+    subject_nidm = _write(output_dir / "sub-51209" / "ses-1" / "nidm.ttl", input_nidm_ttl())
+    ok, _ = _run(tmp_path, SES1_STEMS, output_dir, logger)
+    assert ok is True
+    first = subject_nidm.read_bytes()
+    with caplog.at_level(logging.ERROR):
+        ok, _ = _run(tmp_path, SES1_STEMS, output_dir, logger)
+    assert ok is False
+    assert "does not hold one MRIQC record per IQM JSON" in caplog.text
+    assert caplog.text.count("2 records in NIDM") == len(SES1_STEMS)
+    assert subject_nidm.read_bytes() == first
+
+
 @pytest.mark.parametrize("csv2nidm_version", ["4.x", "5.0.0"])
 def test_no_input_nidm_output_names_the_mriqc_prefix(tmp_path, logger, csv2nidm_version):
     """Without an input NIDM, nidm.ttl is csv2nidm's own graph. csv2nidm 5.0.0
