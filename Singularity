@@ -47,13 +47,18 @@ From: nipreps/mriqc:25.0.0rc0
     # traversable, nothing made executable.
     chmod -R a+rX /opt/src /opt/requirements.txt /opt/setup.py /opt/setup.cfg /opt/VERSION
 
+    # One command per line, not `a && b && c`: set -e ignores a failing command
+    # of an && list unless it is the last, so a failed apt-get update or
+    # micromamba install, or `pip install -r`, would skip the rest of its list
+    # and still end %post with status 0 (an image without PyNIDM or the app).
+
     # Install system dependencies (minimal - conda already provides Python/pip)
-    apt-get update && \
+    apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         git \
-        build-essential \
-        && apt-get clean && \
-        rm -rf /var/lib/apt/lists/*
+        build-essential
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
 
     # Install Python dependencies using conda/pip hybrid approach
     # See requirements.txt for full dependency list
@@ -67,8 +72,8 @@ From: nipreps/mriqc:25.0.0rc0
     micromamba install -n base -y -c conda-forge \
         pandas \
         click \
-        pybids && \
-    pip install --no-cache-dir -r requirements.txt && \
+        pybids
+    pip install --no-cache-dir -r requirements.txt
     pip install --no-deps -e .
 
     # Last step: everything this recipe put under /opt must be usable by
