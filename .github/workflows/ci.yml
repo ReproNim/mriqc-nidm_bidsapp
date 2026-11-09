@@ -24,9 +24,14 @@ jobs:
         python-version: '3.10'
 
     - name: Install dependencies
-      # Mirrors the Dockerfile's install: requirements.txt (pynidm 5.0.0 with
-      # rdflib 7), then the app itself with --no-deps, so CI tests the same
-      # dependency set the container ships.
+      # The same pins as the Dockerfile's install: requirements.txt (pynidm
+      # 5.0.0 with rdflib 7), then the app itself with --no-deps. Not the same
+      # resolved set: the image installs into MRIQC 25's conda env (Python
+      # 3.11, conda pandas 2.2, numpy 1.26), while this runner gets Python 3.10
+      # and the newest PyPI releases (pandas 3.x). csv2nidm reads the IQM CSV
+      # with pandas, and pandas 2.2's default float parser is not round-trip
+      # exact, so IQM literals in the image's nidm.ttl can differ from the IQM
+      # JSON in the last digits; CI does not see that.
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
