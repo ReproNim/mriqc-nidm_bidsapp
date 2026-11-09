@@ -79,7 +79,12 @@ def post(tmp_path):
     opt = tmp_path / "opt"
     opt.mkdir()
     script = tmp_path / "post.sh"
-    script.write_text(_post_body().replace("/opt", str(opt)))
+    # /usr/local/bin is the directory %environment puts first on PATH at run
+    # time; here a scratch directory, so a test can place a command there.
+    local_bin = tmp_path / "usr-local-bin"
+    local_bin.mkdir()
+    script.write_text(
+        _post_body().replace("/opt", str(opt)).replace("/usr/local/bin", str(local_bin)))
 
     def run(shell, fail_at, path_extra=None, python=None):
         """python: an interpreter `python` in %post runs instead of its stub."""
@@ -101,6 +106,7 @@ def post(tmp_path):
         return result, [c.replace(str(opt), "OPT") for c in calls.read_text().splitlines()]
 
     run.opt = opt
+    run.local_bin = local_bin
     return run
 
 
@@ -229,6 +235,18 @@ def test_build_check_fails_when_csv2nidm_cannot_import_nidm(image_env):
     _check_stops_post(*image_env["run"](), "cannot import nidm")
 
 
+def test_build_check_examines_the_run_time_csv2nidm(image_env, post):
+    """At run time %environment puts /usr/local/bin first on PATH. A csv2nidm
+    there, running another environment, is what a job would start, so the
+    check must examine it rather than the build PATH's."""
+    other, other_site = _venv(image_env["tmp"] / "other")
+    _install_fake_pynidm(other_site)
+    shadow = post.local_bin / "csv2nidm"
+    shadow.write_text(f"#!{other}\nimport nidm\n")
+    shadow.chmod(0o755)
+    _check_stops_post(*image_env["run"](), f"{shadow} runs nidm from")
+
+
 def test_build_check_fails_without_csv2nidm(image_env):
     image_env["csv2nidm"].unlink()
     _check_stops_post(*image_env["run"](), "csv2nidm is not on PATH")
@@ -265,3 +283,16 @@ def test_dockerfile_build_check_fails_on_another_pynidm_version(image_env, post,
         ["/bin/sh", "-c", command], capture_output=True, text=True, timeout=60,
         env={"PATH": f"{stubs}:{image_env['csv2nidm'].parent}"})
     assert (result.returncode != 0) == bool(status), result.stderr
+
+
+def test_singularity_check_uses_the_run_time_path():
+    """%post runs with the base image's PATH; the check must be given the
+    PATH %environment sets, which is what a job resolves python and csv2nidm
+    with. (Docker's RUN already sees ENV PATH.)"""
+    env = re.search(r"^%environment\s*$(.*?)^%\w+", SINGULARITY, re.MULTILINE | re.DOTALL)
+    exports = re.findall(r"^\s*export PATH=(\S+)$", env.group(1), re.MULTILINE)
+    assert len(exports) == 1, exports
+    checks = [line.strip() for line in _post_body().splitlines() if "check_pynidm.py" in line
+              and not line.strip().startswith("#")]
+    assert len(checks) == 1, checks
+    assert checks[0].startswith(f"PATH={exports[0]} "), (checks[0], exports[0])

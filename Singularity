@@ -78,8 +78,10 @@ From: nipreps/mriqc:25.0.0rc0
 
     # PyNIDM 5.0.0 must import from this environment's site-packages, and the
     # csv2nidm on PATH must run that same installation; src/check_pynidm.py
-    # exits non-zero otherwise. PYTHONPATH as %environment sets it at run time.
-    PYTHONPATH=/opt python /opt/src/check_pynidm.py
+    # exits non-zero otherwise. PATH and PYTHONPATH as %environment sets them at
+    # run time (%post itself runs with the base image's PATH), so the check
+    # sees the python and csv2nidm a job will start.
+    PATH=/usr/local/bin:$PATH PYTHONPATH=/opt python /opt/src/check_pynidm.py
 
     # Last step: everything this recipe put under /opt must be usable by
     # whoever runs the image, not only by the account that built it.
