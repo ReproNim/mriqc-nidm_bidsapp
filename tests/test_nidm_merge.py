@@ -523,6 +523,91 @@ def test_successful_merge_replaces_nidm_ttl_and_leaves_no_temporary(tmp_path, lo
     assert [p.name for p in subject_dir.iterdir() if p.is_file()] == ["nidm.ttl"]
 
 
+def _merge_with_stub_csv2nidm(tmp_path, logger, nidm_input_dir, output_dir=None):
+    """process_subject on SES1_STEMS with an input NIDM, csv2nidm replaced by
+    a stub writing a valid IQM graph; returns (ok, subject_dir)."""
+    from unittest.mock import patch
+
+    output_dir = output_dir or tmp_path / "out"
+    subject_dir = output_dir / "sub-51209" / "ses-1"
+    mriqc_dir = _mriqc_tree(subject_dir, SES1_STEMS)
+    jsons = sorted(mriqc_dir.rglob("*.json"))
+
+    def csv2nidm(**kwargs):
+        Path(kwargs["output_ttl"]).write_text(iqm_nidm_ttl([str(j) for j in jsons]))
+        return True
+
+    with patch("src.run.convert_csv_to_nidm", side_effect=csv2nidm):
+        ok = process_subject(
+            subject_id="51209", bids_dir=tmp_path, output_dir=output_dir,
+            subject_dir=subject_dir, mriqc_dir=mriqc_dir, session_id="1",
+            nidm_input_dir=nidm_input_dir, skip_mriqc=True, skip_nidm=False,
+            logger=logger,
+        )
+    return ok, subject_dir
+
+
+def _read_only_object(tmp_path, text):
+    """A file shaped like a git-annex object: read-only, in a read-only directory."""
+    obj = tmp_path / "annex" / "objects" / "SHA256E-s1--x.ttl"
+    obj.parent.mkdir(parents=True)
+    obj.write_text(text)
+    obj.chmod(0o444)
+    obj.parent.chmod(0o555)
+    return obj
+
+
+@pytest.mark.parametrize("kind", ["file", "symlink"])
+def test_merge_leaves_the_input_nidm_unchanged(tmp_path, logger, kind):
+    """The input NIDM is read, never written: its bytes, and for a symlink
+    (a datalad dataset's annexed file) the link and its target, are the same
+    after a successful merge."""
+    nidm_dir = tmp_path / "nidm"
+    found = nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl"
+    found.parent.mkdir(parents=True)
+    original = input_nidm_ttl()
+    if kind == "symlink":
+        target = _read_only_object(tmp_path, original)
+        found.symlink_to(target)
+    else:
+        found.write_text(original)
+    mtime = found.stat().st_mtime_ns
+    try:
+        ok, subject_dir = _merge_with_stub_csv2nidm(tmp_path, logger, nidm_dir)
+        assert ok is True
+        assert _linked_images(subject_dir / "nidm.ttl") == {
+            f"{s}.json": [f"{s}.nii.gz"] for s in SES1_STEMS}
+        assert found.read_text() == original
+        assert found.stat().st_mtime_ns == mtime
+        if kind == "symlink":
+            assert found.is_symlink() and found.resolve() == target
+    finally:
+        if kind == "symlink":
+            target.parent.chmod(0o755)
+
+
+def test_input_nidm_in_the_output_directory_is_replaced_not_written(tmp_path, logger):
+    """With the NIDM input directory set to the output directory, the input
+    found is the subject's nidm.ttl itself. The new nidm.ttl replaces it by
+    rename: an annexed input's link is replaced, its object is not written."""
+    output_dir = tmp_path / "out"
+    subject_nidm = output_dir / "sub-51209" / "ses-1" / "nidm.ttl"
+    subject_nidm.parent.mkdir(parents=True)
+    original = input_nidm_ttl()
+    target = _read_only_object(tmp_path, original)
+    subject_nidm.symlink_to(target)
+    try:
+        ok, subject_dir = _merge_with_stub_csv2nidm(
+            tmp_path, logger, nidm_input_dir=output_dir, output_dir=output_dir)
+        assert ok is True
+        assert not subject_nidm.is_symlink()
+        assert _linked_images(subject_nidm) == {
+            f"{s}.json": [f"{s}.nii.gz"] for s in SES1_STEMS}
+        assert target.read_text() == original
+    finally:
+        target.parent.chmod(0o755)
+
+
 @pytest.mark.parametrize("csv2nidm_version", ["4.x", "5.0.0"])
 def test_no_input_nidm_output_names_the_mriqc_prefix(tmp_path, logger, csv2nidm_version):
     """Without an input NIDM, nidm.ttl is csv2nidm's own graph. csv2nidm 5.0.0

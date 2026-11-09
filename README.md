@@ -139,11 +139,17 @@ matches the sibling `freesurfer-nidm` and `fsl-nidm` BIDSapps.
 the per-subject directory: under BABS that directory is what gets zipped and
 shipped, so a copy inside it would be duplicated into every subject's zip.
 
-An input NIDM file is only read, never written: the app writes the result to a
-temporary file in the subject directory and renames it to `nidm.ttl` only after
-checking that it holds one IQM record per IQM JSON. A job that fails in the
-NIDM conversion therefore writes no `nidm.ttl` (a `nidm.ttl` from an earlier
-run in the same directory is left as it was); see below for when a job fails.
+The app never modifies the content of an input NIDM file. It writes the result
+to a temporary file in the subject directory and renames it to `nidm.ttl`
+(`os.replace`) only after checking that it holds one IQM record per IQM JSON.
+When the NIDM input directory is the output directory, the input found is the
+subject's `nidm.ttl` itself, and that rename replaces it with the new file; if
+it was a symlink (e.g. a git-annex file in a datalad dataset), the link is
+replaced and the file it pointed to is left as it was. A job that fails in
+csv2nidm, in linking the IQM records to the input NIDM, or in the record check
+writes no `nidm.ttl` (a `nidm.ttl` from an earlier run in the same directory
+is left as it was). When only some IQM JSONs cannot be read, the records of
+the others are written and the job still fails; see below for when a job fails.
 
 Each image MRIQC rates gets its own record of IQMs in `nidm.ttl`. Besides subject, session, task and run, a record carries the
 image's BIDS `acq`, `ce` and `rec` labels when its filename has them, so two
