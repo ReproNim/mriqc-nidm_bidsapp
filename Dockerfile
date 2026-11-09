@@ -10,7 +10,9 @@ RUN apt-get update && apt-get install -y \
 # =======================================
 # Environment Configuration
 # =======================================
-ENV PYTHONPATH=/opt:$PYTHONPATH
+# Only /opt: the base image sets no PYTHONPATH, and `/opt:$PYTHONPATH` would
+# end in an empty entry, which Python reads as the working directory.
+ENV PYTHONPATH=/opt
 ENV PATH=/usr/local/bin:$PATH
 
 # =======================================

@@ -81,8 +81,11 @@ From: nipreps/mriqc:25.0.0rc0
     fi
 
 %environment
-    # Add opt to Python path
-    export PYTHONPATH=/opt:$PYTHONPATH
+    # Add /opt to the Python path. No empty entry when the host sets no
+    # PYTHONPATH: Python reads an empty entry as the working directory, which
+    # would then come before the installed packages of the app, csv2nidm and
+    # MRIQC.
+    export PYTHONPATH=/opt${PYTHONPATH:+:$PYTHONPATH}
     # Add Python packages to path
     export PATH=/usr/local/bin:$PATH
 
