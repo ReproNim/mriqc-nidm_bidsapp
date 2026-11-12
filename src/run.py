@@ -14,6 +14,7 @@ Follows BIDS Apps specification and patterns from freesurfer_bidsapp.
 
 import argparse
 import contextlib
+import errno
 import json
 import logging
 import math
@@ -165,6 +166,92 @@ def _voxel_limit(value: str) -> float:
     if not math.isfinite(limit) or limit <= 0:
         raise argparse.ArgumentTypeError(f"must be a positive number of mm, got {value}")
     return limit
+
+
+def _has_no_entries(path: str) -> bool:
+    """True if the directory lists no entries.
+
+    One that cannot be listed counts as not empty: the NIDM lookup joins
+    fixed names onto the NIDM input directory and lists only sub-<id>/ below
+    it, so the directory itself needs only search permission.
+    """
+    try:
+        with os.scandir(path) as entries:
+            return next(entries, None) is None
+    except PermissionError:
+        return False
+
+
+# Path arguments other than --nidm-input-dir, as (attribute, name in errors).
+_PATH_ARGUMENTS = (
+    ("bids_dir", "bids_dir"),
+    ("output_dir", "output_dir"),
+    ("mriqc_output_dir", "--mriqc-output-dir"),
+)
+
+# What to check when a path named on the command line is not there.
+_IN_CONTAINER_HINT = "when running in a container, check that it is mounted"
+
+
+def _nidm_input_dir(value: str) -> Path:
+    """Check an explicit --nidm-input-dir: a directory the lookup can use.
+
+    A directory named on the command line that is not there is a typo, an
+    unset variable or a missing bind mount. Without this check every subject
+    gets a nidm.ttl without the input document and the job exits 0. The
+    default location, <bids_dir>/../NIDM, is not checked and may be absent.
+
+    Raises:
+        argparse.ArgumentTypeError: with the reason the directory is unusable.
+    """
+    # "" is an unset variable in a wrapper; as a path it is the working
+    # directory, which can hold a previous run's output.
+    if not value.strip():
+        raise argparse.ArgumentTypeError("must not be empty")
+    try:
+        os.stat(value)
+    except OSError as e:
+        if e.errno in (errno.ENOENT, errno.ENOTDIR):
+            # With a trailing slash, lstat() follows a link, and stat() fails
+            # with ENOTDIR on a file that is there: look at the name itself.
+            bare = value.rstrip(os.sep)
+            if os.path.exists(bare):
+                raise argparse.ArgumentTypeError(f"{value!r} is not a directory")
+            if os.path.islink(bare):
+                raise argparse.ArgumentTypeError(
+                    f"{value!r} is a broken symbolic link (when running in a "
+                    "container, check that its target is mounted)"
+                )
+            raise argparse.ArgumentTypeError(
+                f"{value!r} does not exist ({_IN_CONTAINER_HINT})"
+            )
+        # For example a parent directory without search permission.
+        raise argparse.ArgumentTypeError(
+            f"{value!r} cannot be accessed: {e.strerror}"
+        )
+    if not os.path.isdir(value):
+        raise argparse.ArgumentTypeError(f"{value!r} is not a directory")
+    # Without search permission the lookup raises PermissionError mid-run.
+    if not os.access(value, os.X_OK):
+        raise argparse.ArgumentTypeError(f"{value!r} is not searchable")
+    try:
+        is_empty = _has_no_entries(value)
+    except OSError as e:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} cannot be accessed: {e.strerror}"
+        )
+    # No entries at all means no input for any subject: usually a datalad
+    # subdataset that was never installed, or an empty mount. Installing the
+    # subdataset is not enough for annexed NIDM files: without their content
+    # the run fails after MRIQC, so the message names both steps.
+    if is_empty:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is empty (if it is a datalad subdataset that was never "
+            "installed, 'datalad get -n' installs it and 'datalad get' fetches "
+            "the NIDM files; when running in a container, check that the right "
+            "directory is mounted)"
+        )
+    return Path(value)
 
 
 # MRIQC 25's --modalities choices, and its default when none is given.
@@ -575,15 +662,15 @@ MRIQC Arguments:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    # Required positional arguments (BIDS Apps standard)
+    # Required positional arguments (BIDS Apps standard). The path arguments
+    # are parsed as text and made Paths after parsing (_PATH_ARGUMENTS): Path
+    # turns "" into ".", which would hide an empty value.
     parser.add_argument(
         "bids_dir",
-        type=Path,
         help="Path to BIDS dataset directory",
     )
     parser.add_argument(
         "output_dir",
-        type=Path,
         help="Path to output directory",
     )
     parser.add_argument(
@@ -608,11 +695,14 @@ MRIQC Arguments:
     )
     parser.add_argument(
         "--nidm-input-dir",
-        type=Path,
+        # Checked after parsing (_nidm_input_dir), so that only the value in
+        # effect is checked when the option is repeated, and --help and
+        # --version work whatever it names.
         help=(
             "Directory containing existing NIDM files for augmentation. "
+            "If given, it must exist, be searchable and not be empty. "
             "If not provided, will auto-detect at <BIDS_DIR>/../NIDM/ "
-            "(standard convention location)."
+            "(standard convention location), which may be absent."
         ),
     )
     parser.add_argument(
@@ -622,7 +712,6 @@ MRIQC Arguments:
     )
     parser.add_argument(
         "--mriqc-output-dir",
-        type=Path,
         help="Use existing MRIQC output directory (implies --skip-mriqc)",
     )
     parser.add_argument(
@@ -656,6 +745,23 @@ MRIQC Arguments:
 
     # Use parse_known_args to capture MRIQC-specific arguments
     args, mriqc_extra_args = parser.parse_known_args()
+
+    # Usage errors like argparse's own (exit status 2), before anything is
+    # created or started.
+    for dest, name in _PATH_ARGUMENTS:
+        value = getattr(args, dest)
+        if value is None:
+            continue
+        # "" is an unset variable in a job script. As a path it is the working
+        # directory: an empty output_dir would put the derivatives there.
+        if not value.strip():
+            parser.error(f"argument {name}: must not be empty")
+        setattr(args, dest, Path(value))
+    if args.nidm_input_dir is not None:
+        try:
+            args.nidm_input_dir = _nidm_input_dir(args.nidm_input_dir)
+        except argparse.ArgumentTypeError as e:
+            parser.error(f"argument --nidm-input-dir: {e}")
 
     # Validate the input before creating anything or starting MRIQC.
     #
