@@ -13,9 +13,11 @@ Follows BIDS Apps specification and patterns from freesurfer_bidsapp.
 """
 
 import argparse
+import errno
 import json
 import logging
 import math
+import os
 import re
 import shutil
 import sys
@@ -130,6 +132,63 @@ def _voxel_limit(value: str) -> float:
     if not math.isfinite(limit) or limit <= 0:
         raise argparse.ArgumentTypeError(f"must be a positive number of mm, got {value}")
     return limit
+
+
+def _has_no_entries(path: str) -> bool:
+    """True if the directory lists no entries.
+
+    One that cannot be listed counts as not empty: the NIDM lookup tries fixed
+    paths under it and never lists it, so it needs only search permission.
+    """
+    try:
+        with os.scandir(path) as entries:
+            return next(entries, None) is None
+    except PermissionError:
+        return False
+
+
+def _nidm_input_dir(value: str) -> Path:
+    """argparse type for --nidm-input-dir: a directory the lookup can use.
+
+    A directory named on the command line that is not there is a typo, an
+    unset variable or a missing bind mount. Without this check every subject
+    gets a nidm.ttl without the input document and the job exits 0. The
+    default location, <bids_dir>/../NIDM, does not go through this type and
+    may be absent.
+    """
+    # "" is an unset variable in a wrapper; as a path it is the working
+    # directory, which can hold a previous run's output.
+    if not value.strip():
+        raise argparse.ArgumentTypeError("must not be empty")
+    try:
+        os.stat(value)
+    except OSError as e:
+        if e.errno in (errno.ENOENT, errno.ENOTDIR):
+            raise argparse.ArgumentTypeError(f"{value!r} does not exist")
+        # For example a parent directory without search permission.
+        raise argparse.ArgumentTypeError(
+            f"{value!r} cannot be accessed: {e.strerror}"
+        )
+    if not os.path.isdir(value):
+        raise argparse.ArgumentTypeError(f"{value!r} is not a directory")
+    # Without search permission the lookup raises PermissionError mid-run.
+    if not os.access(value, os.X_OK):
+        raise argparse.ArgumentTypeError(f"{value!r} is not searchable")
+    try:
+        is_empty = _has_no_entries(value)
+    except OSError as e:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} cannot be accessed: {e.strerror}"
+        )
+    # No entries at all means no input for any subject: usually a datalad
+    # subdataset that was never installed, or an empty mount.
+    if is_empty:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is empty (if it is a datalad subdataset, install it "
+            "with 'datalad get -n'; when running in a container, check that "
+            "the right directory is mounted)"
+        )
+    return Path(value)
 
 
 # MRIQC 25's --modalities choices, and its default when none is given.
@@ -551,11 +610,12 @@ MRIQC Arguments:
     )
     parser.add_argument(
         "--nidm-input-dir",
-        type=Path,
+        type=_nidm_input_dir,
         help=(
             "Directory containing existing NIDM files for augmentation. "
+            "If given, it must exist, be searchable and not be empty. "
             "If not provided, will auto-detect at <BIDS_DIR>/../NIDM/ "
-            "(standard convention location)."
+            "(standard convention location), which may be absent."
         ),
     )
     parser.add_argument(
