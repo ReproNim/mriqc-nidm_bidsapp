@@ -11,6 +11,7 @@ buried in MRIQC's traceback rather than reported by us.
 import errno
 import os
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -455,3 +456,124 @@ class TestNidmInputDirValidation:
         assert exit_code == 0
         mock_wrapper.assert_called_once()
         assert mock_process.call_args.kwargs["nidm_input_dir"] is None
+
+
+class TestEmptyPathArguments:
+    """An empty path argument is a usage error, not the current directory.
+
+    An unset variable in a job script gives "". As a path that is ".", so an
+    empty output_dir wrote the derivatives into the job's start directory, and
+    an empty bids_dir was accepted when the job started inside a BIDS dataset.
+    """
+
+    def _argv(self, tmp_path, bids_dir, replace):
+        mriqc_dir = tmp_path / "existing"
+        mriqc_dir.mkdir(exist_ok=True)
+        argv = {
+            "bids_dir": str(bids_dir),
+            "output_dir": str(tmp_path / "out"),
+            "--mriqc-output-dir": str(mriqc_dir),
+        }
+        argv.update(replace)
+        return (
+            argv["bids_dir"],
+            argv["output_dir"],
+            (
+                "--skip-nidm-conversion",
+                "--mriqc-output-dir",
+                argv["--mriqc-output-dir"],
+            ),
+        )
+
+    @pytest.mark.parametrize("empty", ["", "  ", "\t"])
+    @pytest.mark.parametrize(
+        "argument", ["bids_dir", "output_dir", "--mriqc-output-dir"]
+    )
+    def test_rejects_an_empty_value(
+        self, tmp_path, monkeypatch, capsys, argument, empty
+    ):
+        # Start inside a BIDS dataset that also holds what looks like MRIQC
+        # output: there, "." would pass for each of the three arguments.
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        monkeypatch.chdir(bids_dir)
+        before = sorted(p.name for p in bids_dir.iterdir())
+        bids, out, options = self._argv(tmp_path, bids_dir, {argument: empty})
+
+        exit_code, mock_wrapper, mock_process = _run_main(
+            monkeypatch, bids, out, *options
+        )
+
+        err = capsys.readouterr().err
+        assert exit_code == 2, err
+        assert f"argument {argument}: must not be empty" in err, err
+        mock_wrapper.assert_not_called()
+        mock_process.assert_not_called()
+        # Nothing was written: not into the start directory, and no output dir.
+        assert sorted(p.name for p in bids_dir.iterdir()) == before
+        assert not (tmp_path / "out").exists()
+
+    def test_rejects_an_empty_value_given_with_an_equals_sign(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        exit_code, _, mock_process = _run_main(
+            monkeypatch,
+            bids_dir,
+            tmp_path / "out",
+            "--skip-nidm-conversion",
+            "--mriqc-output-dir=",
+        )
+        err = capsys.readouterr().err
+        assert exit_code == 2, err
+        assert "argument --mriqc-output-dir: must not be empty" in err, err
+        mock_process.assert_not_called()
+
+    def test_the_current_directory_can_still_be_named(self, tmp_path, monkeypatch):
+        # "." is a choice; only a value that names nothing is refused.
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        monkeypatch.chdir(bids_dir)
+        exit_code, _, mock_process = _run_main(
+            monkeypatch,
+            ".",
+            tmp_path / "out",
+            "--skip-nidm-conversion",
+            "--mriqc-output-dir",
+            ".",
+        )
+        assert exit_code == 0
+        kwargs = mock_process.call_args.kwargs
+        assert kwargs["bids_dir"] == Path(".")
+        assert kwargs["mriqc_dir"] == Path(".")
+
+    def test_only_the_last_of_a_repeated_option_is_checked(
+        self, tmp_path, monkeypatch
+    ):
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        mriqc_dir = tmp_path / "existing"
+        mriqc_dir.mkdir()
+        exit_code, _, mock_process = _run_main(
+            monkeypatch,
+            bids_dir,
+            tmp_path / "out",
+            "--skip-nidm-conversion",
+            "--mriqc-output-dir",
+            "",
+            "--mriqc-output-dir",
+            str(mriqc_dir),
+        )
+        assert exit_code == 0
+        assert mock_process.call_args.kwargs["mriqc_dir"] == mriqc_dir
+
+    def test_paths_reach_the_run_as_path_objects(self, tmp_path, monkeypatch):
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        out_dir = tmp_path / "out"
+        exit_code, mock_wrapper, mock_process = _run_main(
+            monkeypatch, bids_dir, out_dir, "--skip-nidm-conversion"
+        )
+        assert exit_code == 0
+        assert mock_wrapper.call_args.kwargs == {
+            "bids_dir": bids_dir,
+            "output_dir": out_dir,
+        }
+        kwargs = mock_process.call_args.kwargs
+        assert (kwargs["bids_dir"], kwargs["output_dir"]) == (bids_dir, out_dir)

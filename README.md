@@ -102,6 +102,10 @@ mriqc-nidm <bids_dir> <output_dir> participant \
 - `--participant-label`: Subject ID(s) to process (without 'sub-' prefix)
 - `--nidm-input-dir`: Directory containing existing NIDM files to augment
 
+An empty value for `bids_dir`, `output_dir`, `--mriqc-output-dir` or
+`--nidm-input-dir` (for example an unset variable in a job script) is a usage
+error (status 2). It is not read as the current directory; name that as `.`.
+
 ### Optional Arguments
 
 - `--session-label`: Session label(s) to process (without 'ses-' prefix)
