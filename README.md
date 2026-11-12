@@ -213,6 +213,17 @@ Input NIDM must be Turtle. When `sub-{id}/` has no `*.ttl` but has a
 `*.jsonld` or `*.json-ld` file, step 4 picks that file and the job fails with
 an error naming it, instead of reading it.
 
+A `--nidm-input-dir` given on the command line must be an existing, non-empty
+directory the app can search. Otherwise the app exits with a usage error
+(status 2) before it creates the output directory or starts MRIQC. An empty
+directory is usually a datalad subdataset that was never installed
+(`datalad get -n <path>` installs it; annexed NIDM files then still need
+`datalad get`) or an empty mount. When the option is given more than once,
+the last value is the one used and checked. Without the option, a
+missing `<bids_dir>/../NIDM` is not an error, and neither is a directory that
+holds no file for the subject: the app then writes `nidm.ttl` without an input
+document.
+
 #### How IQM records are written
 
 All IQM JSONs of a job go to csv2nidm as one multi-row CSV, which it writes
