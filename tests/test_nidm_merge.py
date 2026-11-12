@@ -437,8 +437,9 @@ def test_session_run_takes_only_its_session_from_a_shared_mriqc_tree(
         "run.py", str(_bids_dir(tmp_path / "bids")), str(out), "participant",
         "--participant-label", "51209", "--session-label", "1",
         "--mriqc-output-dir", str(mriqc_root),
-        "--nidm-input-dir", str(tmp_path / "no_nidm"),
     ])
+    # No --nidm-input-dir, and no <bids_dir>/../NIDM: the run has no input NIDM.
+    assert not (tmp_path / "NIDM").exists()
 
     assert main() == 0
     links = _linked_images(out / "sub-51209" / "ses-1" / "nidm.ttl")
