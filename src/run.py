@@ -148,6 +148,13 @@ def _has_no_entries(path: str) -> bool:
         return False
 
 
+# Path arguments other than --nidm-input-dir, as (attribute, name in errors).
+_PATH_ARGUMENTS = (
+    ("bids_dir", "bids_dir"),
+    ("output_dir", "output_dir"),
+    ("mriqc_output_dir", "--mriqc-output-dir"),
+)
+
 # What to check when a path named on the command line is not there.
 _IN_CONTAINER_HINT = "when running in a container, check that it is mounted"
 
@@ -599,15 +606,15 @@ MRIQC Arguments:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    # Required positional arguments (BIDS Apps standard)
+    # Required positional arguments (BIDS Apps standard). The path arguments
+    # are parsed as text and made Paths after parsing (_PATH_ARGUMENTS): Path
+    # turns "" into ".", which would hide an empty value.
     parser.add_argument(
         "bids_dir",
-        type=Path,
         help="Path to BIDS dataset directory",
     )
     parser.add_argument(
         "output_dir",
-        type=Path,
         help="Path to output directory",
     )
     parser.add_argument(
@@ -649,7 +656,6 @@ MRIQC Arguments:
     )
     parser.add_argument(
         "--mriqc-output-dir",
-        type=Path,
         help="Use existing MRIQC output directory (implies --skip-mriqc)",
     )
     parser.add_argument(
@@ -684,8 +690,17 @@ MRIQC Arguments:
     # Use parse_known_args to capture MRIQC-specific arguments
     args, mriqc_extra_args = parser.parse_known_args()
 
-    # A usage error like argparse's own (exit status 2), before anything is
+    # Usage errors like argparse's own (exit status 2), before anything is
     # created or started.
+    for dest, name in _PATH_ARGUMENTS:
+        value = getattr(args, dest)
+        if value is None:
+            continue
+        # "" is an unset variable in a job script. As a path it is the working
+        # directory: an empty output_dir would put the derivatives there.
+        if not value.strip():
+            parser.error(f"argument {name}: must not be empty")
+        setattr(args, dest, Path(value))
     if args.nidm_input_dir is not None:
         try:
             args.nidm_input_dir = _nidm_input_dir(args.nidm_input_dir)
