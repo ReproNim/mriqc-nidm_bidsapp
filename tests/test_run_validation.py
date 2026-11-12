@@ -8,12 +8,14 @@ scheduler slot and fails deep inside the container, where the real cause is
 buried in MRIQC's traceback rather than reported by us.
 """
 
+import errno
 import os
 import sys
 from unittest.mock import patch
 
 import pytest
 
+from src.nidm_converter import detect_existing_nidm
 from src.run import main
 
 
@@ -149,7 +151,9 @@ class TestNidmInputDirValidation:
         exit_code, mock_wrapper, mock_process = result
         err = capsys.readouterr().err
         assert exit_code == 2, err
-        assert "--nidm-input-dir" in err
+        # argparse's usage line names every option; this prefix names the one
+        # the error is about.
+        assert "argument --nidm-input-dir: " in err, err
         assert message in err, err
         mock_wrapper.assert_not_called()
         mock_process.assert_not_called()
@@ -181,6 +185,49 @@ class TestNidmInputDirValidation:
                 monkeypatch, bids_dir, out_dir, *extra, "--nidm-input-dir", str(bad)
             )
             self._assert_usage_error(capsys, result, out_dir, message)
+
+    def test_a_missing_directory_error_points_at_the_container_mount(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # In a container the directory can exist on the host and not be bound.
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        out_dir = tmp_path / "out"
+        result = _run_main(
+            monkeypatch, bids_dir, out_dir, "--nidm-input-dir", str(tmp_path / "absent")
+        )
+        self._assert_usage_error(capsys, result, out_dir, "mounted")
+
+    def test_names_a_broken_symlink(self, tmp_path, monkeypatch, capsys):
+        # "does not exist" for a link that ls shows would point at a typo.
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        out_dir = tmp_path / "out"
+        link = tmp_path / "nidm_link"
+        link.symlink_to(tmp_path / "gone")
+        result = _run_main(
+            monkeypatch, bids_dir, out_dir, "--nidm-input-dir", str(link)
+        )
+        self._assert_usage_error(
+            capsys, result, out_dir, "is a broken symbolic link"
+        )
+
+    def test_reports_a_directory_that_cannot_be_read(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # An I/O error while listing is a usage error too, not a traceback.
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        out_dir = tmp_path / "out"
+        nidm = tmp_path / "nidm"
+        (nidm / "sub-01").mkdir(parents=True)
+        with patch(
+            "src.run.os.scandir",
+            side_effect=OSError(errno.EIO, os.strerror(errno.EIO)),
+        ):
+            result = _run_main(
+                monkeypatch, bids_dir, out_dir, "--nidm-input-dir", str(nidm)
+            )
+        self._assert_usage_error(
+            capsys, result, out_dir, "cannot be accessed: " + os.strerror(errno.EIO)
+        )
 
     def test_rejects_an_empty_value_given_with_an_equals_sign(
         self, tmp_path, monkeypatch, capsys
@@ -256,7 +303,9 @@ class TestNidmInputDirValidation:
             monkeypatch, bids_dir, tmp_path / "out", "--nidm-input-dir", str(empty)
         )
         err = capsys.readouterr().err
-        assert "datalad get -n" in err
+        # Installing a subdataset does not fetch its files.
+        assert "'datalad get -n' installs it" in err
+        assert "'datalad get' fetches" in err
         assert "mounted" in err
 
     def test_accepts_a_directory_with_any_entry(self, tmp_path, monkeypatch):
@@ -276,12 +325,99 @@ class TestNidmInputDirValidation:
         mock_wrapper.assert_called_once()
         assert mock_process.call_args.kwargs["nidm_input_dir"] == nidm
 
+    def test_accepts_a_directory_holding_only_dotfiles(self, tmp_path, monkeypatch):
+        # "No entries" is literal: an installed subdataset whose only entries
+        # are .git and .datalad is not treated as empty.
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        nidm = tmp_path / "nidm"
+        (nidm / ".datalad").mkdir(parents=True)
+        exit_code, _, mock_process = _run_main(
+            monkeypatch,
+            bids_dir,
+            tmp_path / "out",
+            "--skip-nidm-conversion",
+            "--nidm-input-dir",
+            str(nidm),
+        )
+        assert exit_code == 0
+        assert mock_process.call_args.kwargs["nidm_input_dir"] == nidm
+
+    def test_accepts_a_symlink_to_a_directory(self, tmp_path, monkeypatch):
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        nidm = tmp_path / "nidm"
+        (nidm / "sub-01").mkdir(parents=True)
+        link = tmp_path / "nidm_link"
+        link.symlink_to(nidm)
+        exit_code, _, mock_process = _run_main(
+            monkeypatch,
+            bids_dir,
+            tmp_path / "out",
+            "--skip-nidm-conversion",
+            "--nidm-input-dir",
+            str(link),
+        )
+        assert exit_code == 0
+        # The path is passed on as given, not resolved.
+        assert mock_process.call_args.kwargs["nidm_input_dir"] == link
+
+    def test_only_the_last_of_a_repeated_option_is_checked(
+        self, tmp_path, monkeypatch
+    ):
+        # A wrapper may put the user's value after a site default; argparse
+        # keeps the last one, so an unusable earlier one is not an error.
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        nidm = tmp_path / "nidm"
+        (nidm / "sub-01").mkdir(parents=True)
+        exit_code, _, mock_process = _run_main(
+            monkeypatch,
+            bids_dir,
+            tmp_path / "out",
+            "--skip-nidm-conversion",
+            "--nidm-input-dir",
+            str(tmp_path / "absent"),
+            "--nidm-input-dir",
+            str(nidm),
+        )
+        assert exit_code == 0
+        assert mock_process.call_args.kwargs["nidm_input_dir"] == nidm
+
+    def test_version_is_printed_whatever_the_directory(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        exit_code, _, _ = _run_main(
+            monkeypatch,
+            bids_dir,
+            tmp_path / "out",
+            "--nidm-input-dir",
+            str(tmp_path / "absent"),
+            "--version",
+        )
+        assert exit_code == 0
+        assert "MRIQC-NIDM BIDSAPP v" in capsys.readouterr().out
+
+    @not_root
+    def test_the_lookup_works_in_a_directory_that_can_only_be_searched(
+        self, tmp_path
+    ):
+        # Why search permission is enough: the lookup joins fixed names onto
+        # the NIDM input directory and lists only sub-<id>/ below it.
+        root = tmp_path / "nidm"
+        (root / "sub-01").mkdir(parents=True)
+        found = root / "sub-01" / "sub-01.ttl"
+        found.write_text("")
+        root.chmod(0o100)
+        try:
+            assert detect_existing_nidm("01", nidm_input_dir=root) == found
+        finally:
+            root.chmod(0o700)
+
     @not_root
     def test_accepts_a_directory_that_can_only_be_searched(
         self, tmp_path, monkeypatch
     ):
-        # The lookup tries fixed paths under the directory and never lists it,
-        # so search permission is enough.
+        # The lookup never lists the directory itself (see the test above), so
+        # it cannot be told to be empty and is taken as usable.
         bids_dir = _write_bids_tree(tmp_path / "bids")
         search_only = tmp_path / "search_only_nidm"
         search_only.mkdir()

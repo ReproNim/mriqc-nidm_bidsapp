@@ -137,8 +137,9 @@ def _voxel_limit(value: str) -> float:
 def _has_no_entries(path: str) -> bool:
     """True if the directory lists no entries.
 
-    One that cannot be listed counts as not empty: the NIDM lookup tries fixed
-    paths under it and never lists it, so it needs only search permission.
+    One that cannot be listed counts as not empty: the NIDM lookup joins
+    fixed names onto the NIDM input directory and lists only sub-<id>/ below
+    it, so the directory itself needs only search permission.
     """
     try:
         with os.scandir(path) as entries:
@@ -147,14 +148,20 @@ def _has_no_entries(path: str) -> bool:
         return False
 
 
+# What to check when a path named on the command line is not there.
+_IN_CONTAINER_HINT = "when running in a container, check that it is mounted"
+
+
 def _nidm_input_dir(value: str) -> Path:
-    """argparse type for --nidm-input-dir: a directory the lookup can use.
+    """Check an explicit --nidm-input-dir: a directory the lookup can use.
 
     A directory named on the command line that is not there is a typo, an
     unset variable or a missing bind mount. Without this check every subject
     gets a nidm.ttl without the input document and the job exits 0. The
-    default location, <bids_dir>/../NIDM, does not go through this type and
-    may be absent.
+    default location, <bids_dir>/../NIDM, is not checked and may be absent.
+
+    Raises:
+        argparse.ArgumentTypeError: with the reason the directory is unusable.
     """
     # "" is an unset variable in a wrapper; as a path it is the working
     # directory, which can hold a previous run's output.
@@ -164,7 +171,13 @@ def _nidm_input_dir(value: str) -> Path:
         os.stat(value)
     except OSError as e:
         if e.errno in (errno.ENOENT, errno.ENOTDIR):
-            raise argparse.ArgumentTypeError(f"{value!r} does not exist")
+            if os.path.islink(value):
+                raise argparse.ArgumentTypeError(
+                    f"{value!r} is a broken symbolic link ({_IN_CONTAINER_HINT})"
+                )
+            raise argparse.ArgumentTypeError(
+                f"{value!r} does not exist ({_IN_CONTAINER_HINT})"
+            )
         # For example a parent directory without search permission.
         raise argparse.ArgumentTypeError(
             f"{value!r} cannot be accessed: {e.strerror}"
@@ -181,12 +194,15 @@ def _nidm_input_dir(value: str) -> Path:
             f"{value!r} cannot be accessed: {e.strerror}"
         )
     # No entries at all means no input for any subject: usually a datalad
-    # subdataset that was never installed, or an empty mount.
+    # subdataset that was never installed, or an empty mount. Installing the
+    # subdataset is not enough for annexed NIDM files: without their content
+    # the run fails after MRIQC, so the message names both steps.
     if is_empty:
         raise argparse.ArgumentTypeError(
-            f"{value!r} is empty (if it is a datalad subdataset, install it "
-            "with 'datalad get -n'; when running in a container, check that "
-            "the right directory is mounted)"
+            f"{value!r} is empty (if it is a datalad subdataset that was never "
+            "installed, 'datalad get -n' installs it and 'datalad get' fetches "
+            "the NIDM files; when running in a container, check that the right "
+            "directory is mounted)"
         )
     return Path(value)
 
@@ -610,7 +626,9 @@ MRIQC Arguments:
     )
     parser.add_argument(
         "--nidm-input-dir",
-        type=_nidm_input_dir,
+        # Checked after parsing (_nidm_input_dir), so that only the value in
+        # effect is checked when the option is repeated, and --help and
+        # --version work whatever it names.
         help=(
             "Directory containing existing NIDM files for augmentation. "
             "If given, it must exist, be searchable and not be empty. "
@@ -659,6 +677,14 @@ MRIQC Arguments:
 
     # Use parse_known_args to capture MRIQC-specific arguments
     args, mriqc_extra_args = parser.parse_known_args()
+
+    # A usage error like argparse's own (exit status 2), before anything is
+    # created or started.
+    if args.nidm_input_dir is not None:
+        try:
+            args.nidm_input_dir = _nidm_input_dir(args.nidm_input_dir)
+        except argparse.ArgumentTypeError as e:
+            parser.error(f"argument --nidm-input-dir: {e}")
 
     # Validate the input before creating anything or starting MRIQC.
     #
