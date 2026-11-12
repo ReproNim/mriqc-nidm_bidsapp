@@ -279,3 +279,35 @@ class TestMriqcFailureHandling:
         # The JSON is there, so the exit code is what decides it.
         assert (out_dir / "sub-01" / "mriqc" / "sub-01" / "anat"
                 / "sub-01_T1w.json").exists()
+
+
+class TestPyNIDMReport:
+    def test_logs_pynidm_version_and_location_once_per_run(self, tmp_path, monkeypatch, caplog):
+        """The PyNIDM the conversion uses is named in the job log once, not
+        per subject: its version, where it is installed and which csv2nidm
+        runs."""
+        import logging
+
+        from src.check_pynidm import pynidm_installation
+
+        version, location = pynidm_installation()
+        bids_dir = _bids(tmp_path / "bids", subjects=("01", "02"))
+        monkeypatch.setattr(sys, "argv", _argv(bids_dir, tmp_path / "out"))
+        with caplog.at_level(logging.INFO), patch("src.run.MRIQCWrapper"), \
+                patch("src.run.check_csv2nidm_available", return_value=True), \
+                patch("src.run.shutil.which", return_value="/image/bin/csv2nidm"), \
+                patch("src.run.process_subject", return_value=True):
+            assert main() == 0
+        reports = [r.getMessage() for r in caplog.records if r.getMessage().startswith("PyNIDM ")]
+        assert reports == [f"PyNIDM {version} from {location}; csv2nidm /image/bin/csv2nidm"]
+
+    def test_no_pynidm_report_without_nidm_conversion(self, tmp_path, monkeypatch, caplog):
+        import logging
+
+        bids_dir = _bids(tmp_path / "bids")
+        monkeypatch.setattr(
+            sys, "argv", _argv(bids_dir, tmp_path / "out", "--skip-nidm-conversion"))
+        with caplog.at_level(logging.INFO), patch("src.run.MRIQCWrapper"), \
+                patch("src.run.process_subject", return_value=True):
+            assert main() == 0
+        assert not [r for r in caplog.records if r.getMessage().startswith("PyNIDM ")]

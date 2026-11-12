@@ -13,6 +13,7 @@ Follows BIDS Apps specification and patterns from freesurfer_bidsapp.
 """
 
 import argparse
+import contextlib
 import errno
 import json
 import logging
@@ -20,7 +21,9 @@ import math
 import os
 import re
 import shutil
+import signal
 import sys
+import tempfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -36,17 +39,19 @@ from .utils import (
 from .nidm_converter import (
     convert_csv_to_nidm,
     convert_mriqc_json_to_csv,
-    copy_and_prepare_nidm,
     detect_existing_nidm,
     build_subject_output_path,
     NIDM_FILENAME,
 )
+from .check_pynidm import pynidm_installation
 from .nidm_converter.csv_to_nidm import check_csv2nidm_available
+from .nidm_converter.nidm_converter import TEMPORARY_PREFIX
 from .nidm_converter.json_to_csv import combine_iqm_csvs, extract_session_label
 from .nidm_converter.nidm_merge import (
     check_iqm_records,
     fix_csv2nidm_types,
     merge_iqms_into_nidm,
+    write_iqm_nidm,
 )
 from .validators import validate_bids_directory, validate_output_directory
 from .nidm_converter.data import get_mriqc_dictionary
@@ -72,6 +77,34 @@ def _cleanup_nidm_intermediates(subject_dir: Path, logger: logging.Logger) -> No
                 logger.warning(f"Could not remove {leftover}: {e}")
 
 
+def _remove_interrupted_temporaries(subject_dir: Path, logger: logging.Logger) -> None:
+    """Delete the temporary nidm.ttl a run killed while converting left in
+    subject_dir (SIGKILL, a node failure), before this run converts."""
+    for leftover in sorted(subject_dir.glob(f"{TEMPORARY_PREFIX}*.ttl")):
+        logger.warning(
+            f"Removing {leftover.name}, a temporary NIDM file left by an interrupted run"
+        )
+        leftover.unlink(missing_ok=True)
+
+
+@contextlib.contextmanager
+def _exit_on_sigterm():
+    """Raise SystemExit(143) on SIGTERM while active, so finally blocks run;
+    Python's default SIGTERM action ends the process without them."""
+    def _raise(signum, frame):
+        raise SystemExit(128 + signum)
+
+    try:
+        previous = signal.signal(signal.SIGTERM, _raise)
+    except ValueError:  # not the main thread; leave SIGTERM alone
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
 def _write_iqm_nidm(
     csv_paths: List[Path],
     software_csv_path: Path,
@@ -94,9 +127,10 @@ def _write_iqm_nidm(
     used as the subject's nidm.ttl or attached to the input NIDM with each
     record linked to its own image.
 
-    source_nidm is the input NIDM as found in the NIDM input directory;
-    augmentation_target is the copy of it being written. Errors name the
-    source, since that is the file to fix.
+    augmentation_target is the graph the IQM records are attached to, read
+    and never written; subject_ttl_file is where the result is written.
+    source_nidm is the input NIDM as found in the NIDM input directory, named
+    in errors, since that is the file to fix.
 
     Raises:
         RuntimeError: If csv2nidm fails
@@ -123,7 +157,7 @@ def _write_iqm_nidm(
             source=source_nidm,
         )
     else:
-        shutil.copyfile(iqm_ttl, subject_ttl_file)
+        write_iqm_nidm(iqm_ttl, subject_ttl_file)
 
 
 def _voxel_limit(value: str) -> float:
@@ -461,9 +495,9 @@ def process_subject(
                     "Pass --session-label to write per-session NIDM instead."
                 )
 
-        # The input NIDM is copied to nidm.ttl and parsed as Turtle, so a
-        # JSON-LD input (the lookup also matches *.jsonld) would fail later
-        # with a Turtle syntax error and leave JSON-LD text named nidm.ttl.
+        # The README asks for Turtle input NIDM, and the lookup also matches
+        # *.jsonld: refuse anything else here, before any conversion, rather
+        # than relying on the merge reading another format by its extension.
         if existing_nidm is not None and existing_nidm.suffix != ".ttl":
             logger.error(
                 f"Input NIDM {existing_nidm} is not Turtle (.ttl); the app reads "
@@ -476,6 +510,7 @@ def process_subject(
         # results, and is ALWAYS named nidm.ttl -- subject identity is carried by
         # the directory, not the filename.
         subject_dir.mkdir(parents=True, exist_ok=True)
+        _remove_interrupted_temporaries(subject_dir, logger)
         subject_ttl_file = subject_dir / NIDM_FILENAME
         logger.debug(f"Target NIDM file: {subject_ttl_file}")
 
@@ -490,22 +525,14 @@ def process_subject(
         # Get data dictionary path
         dictionary_csv = get_mriqc_dictionary()
 
-        # Step 3a: Copy existing NIDM and prepare augmentation target
-        # CRITICAL: Must copy once before loop, not inside loop!
-        augmentation_target = None
+        # Step 3a: The input NIDM is only read: the merged graph (or, without an
+        # input, csv2nidm's own graph) is written to a temporary file beside
+        # nidm.ttl and renamed to nidm.ttl once its records check out (Step 3d).
+        # A failed conversion therefore leaves no nidm.ttl, rather than a copy
+        # of the input that looks like a finished output.
+        augmentation_target = existing_nidm
         if existing_nidm:
-            copied_nidm = copy_and_prepare_nidm(
-                existing_nidm, subject_dir, logger
-            )
-            # Rename to canonical name if different
-            if copied_nidm != subject_ttl_file:
-                copied_nidm.rename(subject_ttl_file)
-                logger.info(
-                    "Renamed copied NIDM to canonical name: "
-                    f"{subject_ttl_file.name}"
-                )
-            augmentation_target = subject_ttl_file
-            logger.info(f"Will augment existing NIDM: {subject_ttl_file}")
+            logger.info(f"Will augment existing NIDM: {existing_nidm}")
 
         # Step 3b: Convert every IQM JSON to a one-row CSV
         any_scan_failed = False
@@ -528,30 +555,51 @@ def process_subject(
 
         # Step 3c: One csv2nidm call for all IQM rows of this job, attached
         # to the input NIDM when there is one (see _write_iqm_nidm).
+        # From the temporary file's creation to its rename into nidm.ttl, it is
+        # removed on any exit: a failed conversion, an exception, Ctrl-C, or
+        # SIGTERM (a time limit, scancel), which is turned into SystemExit for
+        # this stretch so the cleanup runs (subprocess.run then also kills
+        # csv2nidm).
         if csv_paths:
-            try:
-                _write_iqm_nidm(
-                    csv_paths=csv_paths,
-                    software_csv_path=software_csv_path,
-                    dictionary_csv=dictionary_csv,
-                    staging_dir=staging_dir,
-                    augmentation_target=augmentation_target,
-                    subject_ttl_file=subject_ttl_file,
-                    logger=logger,
-                    source_nidm=existing_nidm,
-                )
-            except Exception as e:
-                logger.error(f"Error during NIDM conversion: {e}")
-                return False
+            with _exit_on_sigterm():
+                pending_ttl = None
+                try:
+                    fd, tmp_name = tempfile.mkstemp(
+                        prefix=TEMPORARY_PREFIX, suffix=".ttl", dir=subject_dir
+                    )
+                    pending_ttl = Path(tmp_name)
+                    os.close(fd)
+                    try:
+                        _write_iqm_nidm(
+                            csv_paths=csv_paths,
+                            software_csv_path=software_csv_path,
+                            dictionary_csv=dictionary_csv,
+                            staging_dir=staging_dir,
+                            augmentation_target=augmentation_target,
+                            subject_ttl_file=pending_ttl,
+                            logger=logger,
+                            source_nidm=existing_nidm,
+                        )
+                    except Exception as e:
+                        logger.error(f"Error during NIDM conversion: {e}")
+                        return False
 
-            # Step 3d: Every converted IQM JSON must be exactly one record.
-            problems = check_iqm_records(subject_ttl_file, converted_jsons)
-            if problems:
-                logger.error(
-                    f"{subject_ttl_file} does not hold one MRIQC record per IQM "
-                    f"JSON for sub-{subject_id}: " + "; ".join(problems)
-                )
-                return False
+                    # Step 3d: Every converted IQM JSON must be exactly one record.
+                    problems = check_iqm_records(pending_ttl, converted_jsons)
+                    if problems:
+                        logger.error(
+                            f"The NIDM written for sub-{subject_id} does not hold one "
+                            "MRIQC record per IQM JSON: " + "; ".join(problems)
+                        )
+                        return False
+                    # mkstemp makes the file private; give it the mode a new file gets
+                    umask = os.umask(0)
+                    os.umask(umask)
+                    os.chmod(pending_ttl, 0o666 & ~umask)
+                    os.replace(pending_ttl, subject_ttl_file)
+                finally:
+                    if pending_ttl is not None:
+                        pending_ttl.unlink(missing_ok=True)
             logger.info(
                 f"Wrote {len(converted_jsons)} MRIQC IQM record(s) to "
                 f"{subject_ttl_file.name}"
@@ -565,12 +613,20 @@ def process_subject(
         # Drop the staging tree; it exists only to keep CSVs out of subject_dir.
         shutil.rmtree(staging_dir, ignore_errors=True)
 
-        # Log final output
-        if subject_ttl_file.exists():
+        # Log final output. Only Step 3c writes nidm.ttl, and it ran only when
+        # some IQM JSON was converted; any other nidm.ttl is an earlier run's.
+        if csv_paths:
             size = subject_ttl_file.stat().st_size
             logger.info(
                 f"Created consolidated NIDM: {subject_ttl_file} ({size:,} bytes)"
             )
+        elif subject_ttl_file.exists():
+            logger.warning(
+                f"No NIDM written for sub-{subject_id}; {subject_ttl_file} from an "
+                "earlier run is left as it was"
+            )
+        else:
+            logger.warning(f"No NIDM written for sub-{subject_id}")
 
         if any_scan_failed:
             logger.warning(
@@ -736,6 +792,13 @@ MRIQC Arguments:
             "Install with: pip install pynidm"
         )
         return 1
+    if not args.skip_nidm_conversion:
+        # Once per run: the PyNIDM installed for csv2nidm, and which csv2nidm.
+        pynidm_version, pynidm_location = pynidm_installation()
+        logger.info(
+            f"PyNIDM {pynidm_version} from {pynidm_location}; "
+            f"csv2nidm {shutil.which('csv2nidm')}"
+        )
 
     # Session pinning. BABS session-level jobs always pass --session-label; a
     # subject-level job passes none and everything lands under sub-<id>/.

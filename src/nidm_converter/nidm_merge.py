@@ -29,6 +29,18 @@ PROV = Namespace("http://www.w3.org/ns/prov#")
 NIDM = Namespace("http://purl.org/nidash/nidm#")
 DCT = Namespace("http://purl.org/dc/terms/")
 SIO = Namespace("http://semanticscience.org/ontology/sio.owl#")
+# The IQM properties' namespace (json_to_csv's software url). csv2nidm 4.x
+# binds the prefix mriqc to it. csv2nidm 5.0.0 builds its output with
+# rdflib's Graph.__add__, which binds the prefixes of both operands by
+# iterating a set: the project graph it parsed back names this namespace ns1,
+# its CDE graph names it mriqc, and whichever the process's string hash seed
+# puts last wins, so the same input gives ns1: or mriqc: from run to run.
+# Every graph the app writes goes through serialize_nidm, which binds mriqc.
+MRIQC = Namespace("https://mriqc.readthedocs.io/en/stable/")
+# Bound by bidsmri2nidm as dcmitype; rdflib combines graphs' bindings from a
+# set, so csv2nidm's output and the merge named it dcmitype or dctypes
+# depending on the string hash seed.
+DCMITYPE = Namespace("http://purl.org/dc/dcmitype/")
 # csv2nidm writes rdfs:type (not a term of the closed RDFS namespace) on the
 # entities of a new file.
 RDFS_TYPE = URIRef(str(RDFS) + "type")
@@ -110,6 +122,25 @@ def fix_csv2nidm_types(ttl: Path) -> int:
     return added
 
 
+def serialize_nidm(graph: Graph, destination: Path) -> None:
+    """Write graph to destination as Turtle, the IQM properties' namespace
+    named mriqc and the DCMI types namespace dcmitype, whatever prefixes the
+    graph had bound to them: rdflib picks between two prefixes for one
+    namespace by the string hash seed, so the same run would otherwise write
+    different text."""
+    graph.bind("mriqc", MRIQC, override=True, replace=True)
+    graph.bind("dcmitype", DCMITYPE, override=True, replace=True)
+    graph.serialize(destination=str(destination), format="turtle")
+
+
+def write_iqm_nidm(iqm_ttl: Path, output_ttl: Path) -> None:
+    """Write csv2nidm's IQM graph to output_ttl as the subject's NIDM (the
+    case without an input NIDM), through serialize_nidm."""
+    graph = Graph()
+    graph.parse(iqm_ttl, format="turtle")
+    serialize_nidm(graph, output_ttl)
+
+
 def _participant(graph: Graph, activity) -> Optional[URIRef]:
     """Agent associated with an activity in the sio:Subject role."""
     for assoc in graph.objects(activity, PROV.qualifiedAssociation):
@@ -156,8 +187,9 @@ def merge_iqms_into_nidm(
 
     source = source or input_ttl
     base = Graph()
-    # Parsed by extension. The app always passes its nidm.ttl copy and refuses
-    # a non-Turtle input before getting here, so in the app this is Turtle.
+    # Parsed by extension. The app passes the input NIDM it found, read only,
+    # and refuses a non-Turtle input before getting here, so in the app this
+    # is Turtle.
     base.parse(input_ttl, format=guess_format(str(input_ttl)) or "turtle")
     iqm = Graph()
     iqm.parse(iqm_ttl, format="turtle")
@@ -229,7 +261,7 @@ def merge_iqms_into_nidm(
     for graph in (base, iqm):
         for prefix, namespace in graph.namespaces():
             merged.bind(prefix, namespace, override=False)
-    merged.serialize(destination=str(output_ttl), format="turtle")
+    serialize_nidm(merged, output_ttl)
 
     logger.info(
         f"Linked {len(records)} MRIQC IQM record(s) to input acquisitions "

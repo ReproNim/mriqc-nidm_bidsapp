@@ -24,17 +24,18 @@ jobs:
         python-version: '3.10'
 
     - name: Install dependencies
-      # Mirrors the Dockerfile's two-step install. pynidm 4.5.0 declares a stale
-      # rdflib>=6.3.2,<6.4 pin, but its oxigraph-backed store needs rdflib 7.
-      # The editable install must be --no-deps: with deps it re-resolves
-      # install_requires (which is requirements.txt) and downgrades rdflib
-      # straight back to 6.3.2, so CI would green-light a stack that is not the
-      # one the container actually ships.
+      # The same pins as the Dockerfile's install: requirements.txt (pynidm
+      # 5.0.0 with rdflib 7), then the app itself with --no-deps. Not the same
+      # resolved set: the image installs into MRIQC 25's conda env (Python
+      # 3.11, conda pandas 2.2, numpy 1.26), while this runner gets Python 3.10
+      # and the newest PyPI releases (pandas 3.x). csv2nidm reads the IQM CSV
+      # with pandas, and pandas 2.2's default float parser is not round-trip
+      # exact, so IQM literals in the image's nidm.ttl can differ from the IQM
+      # JSON in the last digits; CI does not see that.
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install --upgrade 'rdflib>=7.0.0,<8'
-        pip install pytest pytest-cov flake8
+        pip install pytest pytest-cov flake8 pyyaml
         pip install --no-deps -e .
 
     - name: Lint with flake8

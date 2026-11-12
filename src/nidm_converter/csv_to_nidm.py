@@ -44,6 +44,43 @@ def check_csv2nidm_available() -> bool:
     return shutil.which(CSV2NIDM_TOOL) is not None
 
 
+# csv2nidm stderr lines that are not relayed as warnings. ontquery logs this
+# one whenever it is loaded without a SciCrunch API key; the app passes
+# -no_concepts, so csv2nidm never queries InterLex. Matched as the end of the
+# line (ontquery's log prefix carries a timestamp), on the exact text.
+HARMLESS_STDERR_NOTICES = (
+    "You have not set an API key for the SciCrunch API! "
+    "InterLexRemote will error if you try to use it.",
+)
+
+
+def _is_harmless(line: str) -> bool:
+    return any(line.strip().endswith(notice) for notice in HARMLESS_STDERR_NOTICES)
+
+
+def _failure_cause(error: subprocess.CalledProcessError):
+    """The line that says why csv2nidm failed, and its stderr without notices.
+
+    The cause is the last line of a traceback on stderr; else csv2nidm's own
+    first "ERROR" line, which it prints to stdout before exiting; else the
+    first remaining stderr line. The SciCrunch notice, which csv2nidm prints
+    on every run, is never the cause.
+    """
+    stderr = [line.rstrip() for line in (error.stderr or "").splitlines()
+              if line.strip() and not _is_harmless(line)]
+    stdout_errors = [line.strip() for line in (error.stdout or "").splitlines()
+                     if line.strip().startswith("ERROR")]
+    if any(line.startswith("Traceback") for line in stderr):
+        cause = stderr[-1].strip()
+    elif stdout_errors:
+        cause = stdout_errors[0]
+    elif stderr:
+        cause = stderr[0].strip()
+    else:
+        cause = f"exit status {error.returncode}, no error message"
+    return cause, stderr
+
+
 def convert_csv_to_nidm(
     csv_file: Path,
     dictionary_csv: Path,
@@ -162,18 +199,25 @@ def convert_csv_to_nidm(
 
     # Execute csv2nidm
     try:
+        # stdin at EOF: csv2nidm asks on stdin about a column missing from the
+        # data dictionary, and from a terminal it would wait for an answer
+        # until the timeout instead of failing.
         result = subprocess.run(
-            cmd, capture_output=True, text=True, check=True, timeout=TIMEOUT_SECONDS
+            cmd, capture_output=True, text=True, check=True, timeout=TIMEOUT_SECONDS,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired as e:
         logger.error(f"csv2nidm timed out after {TIMEOUT_SECONDS} seconds")
         raise RuntimeError(f"csv2nidm execution timed out: {e}") from e
     except subprocess.CalledProcessError as e:
-        logger.error(f"csv2nidm failed with return code {e.returncode}")
-        logger.error(f"stdout: {e.stdout}")
-        logger.error(f"stderr: {e.stderr}")
+        cause, stderr = _failure_cause(e)
+        logger.error(f"csv2nidm failed with return code {e.returncode}: {cause}")
+        if e.stdout:
+            logger.error(f"stdout: {e.stdout}")
+        if stderr:
+            logger.error("stderr: " + "\n".join(stderr))
         raise RuntimeError(
-            f"csv2nidm failed: {e.stderr or e.stdout or 'Unknown error'}"
+            "\n".join([f"csv2nidm failed: {cause}", *stderr])
         ) from e
     except (OSError, subprocess.SubprocessError) as e:
         logger.error(f"Failed to execute csv2nidm: {e}")
@@ -185,9 +229,19 @@ def convert_csv_to_nidm(
     else:
         logger.info(f"Successfully created NIDM: {output_ttl}")
 
-    # Log any warnings from stdout
     if result.stdout:
         logger.debug(f"csv2nidm output: {result.stdout}")
+    # A run csv2nidm completes can still report on stderr what it skipped or
+    # could not do; log every line so it reaches the job log, except lines
+    # known to say nothing about the output (logged at DEBUG).
+    for line in (result.stderr or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if _is_harmless(line):
+            logger.debug(f"csv2nidm: {line}")
+        else:
+            logger.warning(f"csv2nidm: {line}")
 
     return True
 

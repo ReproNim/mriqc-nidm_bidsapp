@@ -286,6 +286,139 @@ def test_convert_csv_to_nidm_execution_failure(tmp_files, mock_logger):
             )
 
 
+def _convert_with(tmp_files, logger, **run):
+    with patch("shutil.which", return_value="/usr/bin/csv2nidm"), patch(
+        "subprocess.run", **run
+    ):
+        return convert_csv_to_nidm(
+            csv_file=tmp_files["csv_file"],
+            dictionary_csv=tmp_files["dictionary_csv"],
+            software_metadata_csv=tmp_files["software_metadata_csv"],
+            output_ttl=tmp_files["output_ttl"],
+            logger=logger,
+        )
+
+
+def test_convert_csv_to_nidm_logs_stderr_of_a_successful_run(tmp_files, caplog):
+    """csv2nidm can finish with exit 0 and report on stderr what it did not do;
+    every non-empty stderr line is logged as a warning."""
+    result = subprocess.CompletedProcess(
+        args=["csv2nidm"], returncode=0, stdout="",
+        stderr="/x/csv2nidm.py:1: UserWarning: column foo not mapped\n\n  warnings.warn(\n")
+    logger = logging.getLogger("test_csv2nidm_stderr")
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        assert _convert_with(tmp_files, logger, return_value=result) is True
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == [
+        "csv2nidm: /x/csv2nidm.py:1: UserWarning: column foo not mapped",
+        "csv2nidm: warnings.warn(",
+    ]
+
+
+# The line ontquery logs on stderr whenever csv2nidm loads it without a
+# SciCrunch API key, as it appears in a real run's stderr.
+SCICRUNCH_NOTICE = (
+    "[2026-11-04 10:45:27,911] -  WARNING -       ontquery -      interlex.py:81   - "
+    "You have not set an API key for the SciCrunch API! "
+    "InterLexRemote will error if you try to use it."
+)
+
+
+def test_convert_csv_to_nidm_does_not_relay_the_scicrunch_api_key_notice(tmp_files, caplog):
+    """The app passes -no_concepts, so csv2nidm never queries InterLex and the
+    missing-key notice says nothing about the output; it is logged at DEBUG,
+    and every other stderr line still reaches the log as a warning."""
+    result = subprocess.CompletedProcess(
+        args=["csv2nidm"], returncode=0, stdout="",
+        stderr=SCICRUNCH_NOTICE + "\n/x/csv2nidm.py:1: UserWarning: column foo not mapped\n"
+               "You have not set an API key for the SciCrunch API! and something else\n")
+    logger = logging.getLogger("test_csv2nidm_scicrunch")
+    with caplog.at_level(logging.DEBUG, logger=logger.name):
+        assert _convert_with(tmp_files, logger, return_value=result) is True
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == [
+        "csv2nidm: /x/csv2nidm.py:1: UserWarning: column foo not mapped",
+        "csv2nidm: You have not set an API key for the SciCrunch API! and something else",
+    ]
+    debug = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG]
+    assert any("SciCrunch API! InterLexRemote will error" in m for m in debug)
+
+
+def test_convert_csv_to_nidm_success_without_stderr_logs_no_warning(tmp_files, caplog):
+    result = subprocess.CompletedProcess(args=["csv2nidm"], returncode=0, stdout="ok", stderr="")
+    logger = logging.getLogger("test_csv2nidm_quiet")
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        assert _convert_with(tmp_files, logger, return_value=result) is True
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+def test_convert_csv_to_nidm_failure_logs_stdout_and_stderr(tmp_files, caplog):
+    error = subprocess.CalledProcessError(
+        returncode=1, cmd=["csv2nidm"], output="Reading CSV\n", stderr="Error: Invalid CSV format")
+    logger = logging.getLogger("test_csv2nidm_failure")
+    with caplog.at_level(logging.INFO, logger=logger.name), \
+            pytest.raises(RuntimeError, match="Invalid CSV format"):
+        _convert_with(tmp_files, logger, side_effect=error)
+    errors = " ".join(r.getMessage() for r in caplog.records if r.levelno == logging.ERROR)
+    assert "Reading CSV" in errors and "Error: Invalid CSV format" in errors
+
+
+TRACEBACK = (
+    "Traceback (most recent call last):\n"
+    '  File "/x/csv2nidm.py", line 300, in main\n'
+    "    answer = input()\n"
+    "EOFError: EOF when reading a line\n"
+)
+
+
+def _failure_records(tmp_files, caplog, error):
+    logger = logging.getLogger("test_csv2nidm_failure_headline")
+    with caplog.at_level(logging.DEBUG, logger=logger.name), \
+            pytest.raises(RuntimeError) as raised:
+        _convert_with(tmp_files, logger, side_effect=error)
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    return str(raised.value), errors
+
+
+def test_csv2nidm_failure_leads_with_the_traceback_not_the_scicrunch_notice(tmp_files, caplog):
+    """csv2nidm writes the SciCrunch notice to stderr on every run, so a
+    failure's stderr starts with it; the cause is the traceback's last line."""
+    error = subprocess.CalledProcessError(
+        returncode=1, cmd=["csv2nidm"], output="json_key=cjv, column=cjv\n",
+        stderr=SCICRUNCH_NOTICE + "\n" + TRACEBACK)
+    message, errors = _failure_records(tmp_files, caplog, error)
+    assert message.splitlines()[0] == "csv2nidm failed: EOFError: EOF when reading a line"
+    assert "SciCrunch" not in message
+    assert "EOFError: EOF when reading a line" in errors[0]
+    assert not any("SciCrunch" in m for m in errors), errors
+    # The whole traceback and stdout still reach the log.
+    assert any('File "/x/csv2nidm.py", line 300' in m for m in errors)
+    assert any("json_key=cjv" in m for m in errors)
+
+
+def test_csv2nidm_failure_reported_on_stdout_leads_the_message(tmp_files, caplog):
+    """csv2nidm prints some of its errors to stdout and exits; stderr then
+    holds only the notice, which used to be the whole error message."""
+    error = subprocess.CalledProcessError(
+        returncode=1, cmd=["csv2nidm"],
+        output="Reading CSV\nERROR: column zzz has no entry in the data dictionary\n",
+        stderr=SCICRUNCH_NOTICE + "\n")
+    message, errors = _failure_records(tmp_files, caplog, error)
+    assert message.splitlines()[0] == (
+        "csv2nidm failed: ERROR: column zzz has no entry in the data dictionary")
+    assert "SciCrunch" not in message
+    assert "column zzz" in errors[0]
+    assert not any("SciCrunch" in m for m in errors), errors
+
+
+def test_csv2nidm_failure_without_output_names_the_exit_status(tmp_files, caplog):
+    error = subprocess.CalledProcessError(
+        returncode=3, cmd=["csv2nidm"], output="", stderr=SCICRUNCH_NOTICE + "\n")
+    message, errors = _failure_records(tmp_files, caplog, error)
+    assert message.splitlines()[0] == "csv2nidm failed: exit status 3, no error message"
+    assert not any("SciCrunch" in m for m in errors), errors
+
+
 def test_convert_csv_to_nidm_timeout(tmp_files, mock_logger):
     """Test error when csv2nidm execution times out."""
     with patch("shutil.which", return_value="/usr/bin/csv2nidm"), patch(

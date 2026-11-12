@@ -10,7 +10,9 @@ RUN apt-get update && apt-get install -y \
 # =======================================
 # Environment Configuration
 # =======================================
-ENV PYTHONPATH=/opt:$PYTHONPATH
+# Only /opt: the base image sets no PYTHONPATH, and `/opt:$PYTHONPATH` would
+# end in an empty entry, which Python reads as the working directory.
+ENV PYTHONPATH=/opt
 ENV PATH=/usr/local/bin:$PATH
 
 # =======================================
@@ -28,18 +30,20 @@ WORKDIR /opt
 
 # Install conda-forge packages with micromamba, then pip packages
 # Combining into single RUN reduces image layers
-# NOTE the two-step pip install. pynidm 4.5.0 *declares* rdflib>=6.3.2,<6.4, but
-# it ships an oxigraph-backed store whose oxrdflib requires rdflib<8 and actually
-# wants rdflib 7. Installing requirements first and then force-upgrading rdflib
-# deliberately overrides pynidm's stale pin -- a single resolved install cannot
-# express this (uv refuses it outright). Same order as freesurfer-nidm_bidsapp.
+# requirements.txt pins pynidm 5.0.0 and rdflib 7 in one resolvable set (PyNIDM
+# 5.0.0 declares rdflib>=6.3.2,<8), so a single pip install is enough. The
+# editable install is --no-deps so it cannot re-resolve anything already pinned.
 RUN micromamba install -n base -y -c conda-forge \
         pandas \
         click \
         pybids && \
     pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir --upgrade 'rdflib>=7.0.0,<8' && \
     pip install --no-deps -e .
+
+# PyNIDM 5.0.0 must import from this environment's site-packages, and the
+# csv2nidm on PATH must run that same installation; src/check_pynidm.py exits
+# non-zero otherwise. The same check runs in Singularity's %post.
+RUN PYTHONPATH=/opt python /opt/src/check_pynidm.py
 
 # Everything the app reads must be usable by a non-root --user, the same check
 # Singularity runs at the end of %post.
@@ -65,6 +69,6 @@ ENTRYPOINT ["mriqc-nidm"]
 # does not invalidate the cached layers above.
 ARG GIT_COMMIT=unknown
 # The version label overrides the base image's own (e.g. Ubuntu's 22.04).
-LABEL org.opencontainers.image.version=0.1.3 \
+LABEL org.opencontainers.image.version=0.1.4 \
       org.opencontainers.image.revision=$GIT_COMMIT \
       org.opencontainers.image.source=https://github.com/ReproNim/mriqc-nidm_bidsapp

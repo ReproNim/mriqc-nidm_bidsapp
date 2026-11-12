@@ -34,7 +34,7 @@ From: nipreps/mriqc:25.0.0rc0
     # same key in %labels (it warns "already exists ... not overwriting"); a
     # label written here replaces it either way. SingularityCE sets only
     # SINGULARITY_LABELS, hence the fallback.
-    echo "org.opencontainers.image.version 0.1.3" >> "${APPTAINER_LABELS:-$SINGULARITY_LABELS}"
+    echo "org.opencontainers.image.version 0.1.4" >> "${APPTAINER_LABELS:-$SINGULARITY_LABELS}"
 
     # Create opt directory for application code
     mkdir -p /opt
@@ -47,32 +47,41 @@ From: nipreps/mriqc:25.0.0rc0
     # traversable, nothing made executable.
     chmod -R a+rX /opt/src /opt/requirements.txt /opt/setup.py /opt/setup.cfg /opt/VERSION
 
+    # One command per line, not `a && b && c`: set -e ignores a failing command
+    # of an && list unless it is the last, so a failed apt-get update or
+    # micromamba install, or `pip install -r`, would skip the rest of its list
+    # and still end %post with status 0 (an image without PyNIDM or the app).
+
     # Install system dependencies (minimal - conda already provides Python/pip)
-    apt-get update && \
+    apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         git \
-        build-essential \
-        && apt-get clean && \
-        rm -rf /var/lib/apt/lists/*
+        build-essential
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
 
     # Install Python dependencies using conda/pip hybrid approach
     # See requirements.txt for full dependency list
     cd /opt
 
     # Install conda-forge packages with micromamba, then pip packages
-    # NOTE the two-step pip install. pynidm 4.5.0 *declares* rdflib>=6.3.2,<6.4,
-    # but it ships an oxigraph-backed store whose oxrdflib requires rdflib<8 and
-    # actually wants rdflib 7. Installing requirements first and then
-    # force-upgrading rdflib deliberately overrides pynidm's stale pin -- a
-    # single resolved install cannot express this (uv refuses it outright).
-    # Same order as freesurfer-nidm_bidsapp.
+    # requirements.txt pins pynidm 5.0.0 and rdflib 7 in one resolvable set
+    # (PyNIDM 5.0.0 declares rdflib>=6.3.2,<8), so a single pip install is
+    # enough. The editable install is --no-deps so it cannot re-resolve
+    # anything already pinned.
     micromamba install -n base -y -c conda-forge \
         pandas \
         click \
-        pybids && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir --upgrade 'rdflib>=7.0.0,<8' && \
+        pybids
+    pip install --no-cache-dir -r requirements.txt
     pip install --no-deps -e .
+
+    # PyNIDM 5.0.0 must import from this environment's site-packages, and the
+    # csv2nidm on PATH must run that same installation; src/check_pynidm.py
+    # exits non-zero otherwise. PATH and PYTHONPATH as %environment sets them at
+    # run time (%post itself runs with the base image's PATH), so the check
+    # sees the python and csv2nidm a job will start.
+    PATH=/usr/local/bin:$PATH PYTHONPATH=/opt python /opt/src/check_pynidm.py
 
     # Last step: everything this recipe put under /opt must be usable by
     # whoever runs the image, not only by the account that built it.
@@ -84,8 +93,11 @@ From: nipreps/mriqc:25.0.0rc0
     fi
 
 %environment
-    # Add opt to Python path
-    export PYTHONPATH=/opt:$PYTHONPATH
+    # Add /opt to the Python path. No empty entry when the host sets no
+    # PYTHONPATH: Python reads an empty entry as the working directory, which
+    # would then come before the installed packages of the app, csv2nidm and
+    # MRIQC.
+    export PYTHONPATH=/opt${PYTHONPATH:+:$PYTHONPATH}
     # Add Python packages to path
     export PATH=/usr/local/bin:$PATH
 
@@ -94,15 +106,16 @@ From: nipreps/mriqc:25.0.0rc0
     mriqc-nidm "$@"
 
 %help
-    MRIQC-NIDM BIDS App 0.1.3
+    MRIQC-NIDM BIDS App 0.1.4
 
     A BIDS Application that executes MRIQC (MRI Quality Control) on BIDS datasets
     and converts output to NIDM (Neuroimaging Data Model) format for improved
     interoperability.
 
     Version Information:
-    - MRIQC-NIDM: 0.1.3
+    - MRIQC-NIDM: 0.1.4
     - MRIQC: 25.0.0rc0
+    - PyNIDM: 5.0.0
     - Base Image: nipreps/mriqc:25.0.0rc0
 
     Usage:

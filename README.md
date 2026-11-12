@@ -143,8 +143,23 @@ matches the sibling `freesurfer-nidm` and `fsl-nidm` BIDSapps.
 the per-subject directory: under BABS that directory is what gets zipped and
 shipped, so a copy inside it would be duplicated into every subject's zip.
 
-The app copies existing NIDM files before augmentation, so originals are never
-overwritten.
+The app never modifies the content of an input NIDM file. It writes the result
+to a temporary file in the subject directory and renames it to `nidm.ttl`
+(`os.replace`) only after checking that it holds one IQM record per IQM JSON.
+When the NIDM input directory is the output directory, the input found is the
+subject's `nidm.ttl` itself, and that rename replaces it with the new file; if
+it was a symlink (e.g. a git-annex file in a datalad dataset), the link is
+replaced and the file it pointed to is left as it was. That works once: a
+re-run in this layout fails, because its input is then the earlier run's
+output, which already holds this app's IQM records, and the record check finds
+two records per IQM JSON (`... 2 records in NIDM`). Keep the input NIDM in a
+directory of its own (`<bids_dir>/../NIDM` or `--nidm-input-dir`) and write the
+output elsewhere; to re-run in place, first put the original input NIDM back
+as `nidm.ttl`. A job that fails in
+csv2nidm, in linking the IQM records to the input NIDM, or in the record check
+writes no `nidm.ttl` (a `nidm.ttl` from an earlier run in the same directory
+is left as it was). When only some IQM JSONs cannot be read, the records of
+the others are written and the job still fails; see below for when a job fails.
 
 Each image MRIQC rates gets its own record of IQMs in `nidm.ttl`. Besides subject, session, task and run, a record carries the
 image's BIDS `acq`, `ce` and `rec` labels when its filename has them, so two
@@ -253,11 +268,15 @@ csv2nidm also gives the IQM records and the agent their NIDM types through
 `rdfs:type`, a predicate neither RDF nor RDFS defines. Before writing
 `nidm.ttl`, the app rewrites those triples as `rdf:type` and adds
 `prov:SoftwareAgent` to the agent. Output from a csv2nidm that already types the
-agent `prov:SoftwareAgent` (incf-nidash/PyNIDM#457) is not rewritten.
+agent `prov:SoftwareAgent` (incf-nidash/PyNIDM#457) is not rewritten. csv2nidm
+from PyNIDM 5.0.0, which the image ships, already writes `rdf:type` and types
+the agent `prov:SoftwareAgent`, so with it the rewrite changes nothing.
 
-A job fails (non-zero exit) when an IQM record matches no acquisition or
-several, or when `nidm.ttl` does not end up with exactly one IQM record per
-IQM JSON. When the app runs MRIQC itself, the job also fails when MRIQC exits
+A job fails (non-zero exit), and writes no `nidm.ttl`, when csv2nidm fails,
+when an IQM record matches no acquisition or several, or when the result does
+not hold exactly one IQM record per IQM JSON. An IQM JSON the app cannot read
+also fails the job, but the records of the others are still written. When the
+app runs MRIQC itself, the job also fails when MRIQC exits
 non-zero or no IQM JSON is found for a subject. That subject is not converted
 to NIDM, even if MRIQC wrote some IQM JSONs before failing.
 
