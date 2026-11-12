@@ -353,6 +353,74 @@ def _assert_clean_mriqc_output(ttl: Path, caplog):
     assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []
 
 
+def _lookup_only(tmp_path, logger, nidm_input_dir, skip_nidm=False):
+    """process_subject up to the input NIDM lookup: with no MRIQC output it
+    returns False right after it."""
+    bids = tmp_path / "bids"
+    bids.mkdir(exist_ok=True)
+    output_dir = tmp_path / "out"
+    subject_dir = output_dir / "sub-51209"
+    return process_subject(
+        subject_id="51209", bids_dir=bids, output_dir=output_dir,
+        subject_dir=subject_dir, mriqc_dir=subject_dir / "mriqc", session_id=None,
+        nidm_input_dir=nidm_input_dir, skip_mriqc=True, skip_nidm=skip_nidm,
+        logger=logger,
+    )
+
+
+def _warnings(caplog):
+    return [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+
+
+def test_subject_missing_from_the_nidm_input_is_a_warning(tmp_path, logger, caplog):
+    """An input NIDM directory without this subject: the output is standalone,
+    and the job log says so (under BABS it is the only sign)"""
+    nidm_dir = tmp_path / "nidm"
+    _write(nidm_dir / "sub-00001" / "nidm.ttl", "")
+    with caplog.at_level(logging.DEBUG):
+        _lookup_only(tmp_path, logger, nidm_dir)
+
+    [missing] = [w for w in _warnings(caplog) if "input NIDM" in w]
+    assert "sub-51209" in missing
+    assert str(nidm_dir) in missing
+
+
+def test_subject_missing_from_the_default_nidm_location_is_a_warning(
+    tmp_path, logger, caplog
+):
+    """The same for the default <bids_dir>/../NIDM when it exists"""
+    _write(tmp_path / "NIDM" / "sub-00001" / "nidm.ttl", "")
+    with caplog.at_level(logging.DEBUG):
+        _lookup_only(tmp_path, logger, None)
+
+    [missing] = [w for w in _warnings(caplog) if "input NIDM" in w]
+    assert "sub-51209" in missing
+
+
+def test_no_nidm_directory_at_all_is_not_a_warning(tmp_path, logger, caplog):
+    """A run with no NIDM input anywhere is a standalone run by choice"""
+    with caplog.at_level(logging.DEBUG):
+        _lookup_only(tmp_path, logger, None)
+
+    assert [w for w in _warnings(caplog) if "input NIDM" in w] == []
+    assert any(
+        "No input NIDM" in r.getMessage() and r.levelno == logging.INFO
+        for r in caplog.records
+    )
+
+
+def test_skipped_conversion_does_not_warn_about_the_nidm_input(
+    tmp_path, logger, caplog
+):
+    """--skip-nidm-conversion writes no nidm.ttl, so a missing input does not matter"""
+    nidm_dir = tmp_path / "nidm"
+    _write(nidm_dir / "sub-00001" / "nidm.ttl", "")
+    with caplog.at_level(logging.DEBUG):
+        _lookup_only(tmp_path, logger, nidm_dir, skip_nidm=True)
+
+    assert [w for w in _warnings(caplog) if "input NIDM" in w] == []
+
+
 @needs_csv2nidm
 def test_no_input_nidm_keeps_every_iqm_record(tmp_path, logger, caplog, monkeypatch):
     """Every IQM JSON of the job becomes a record, not only the first"""

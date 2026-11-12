@@ -388,6 +388,33 @@ def _iqm_jsons_of_session(
     return in_session
 
 
+def _log_missing_input_nidm(
+    subject_id: str,
+    nidm_input_dir: Optional[Path],
+    bids_dir: Path,
+    logger: logging.Logger,
+) -> None:
+    """Say that a subject gets a standalone nidm.ttl because no input NIDM was found.
+
+    A NIDM directory that exists but has no file for this subject is a
+    warning: the dataset has NIDM, this subject is missing from it, and the
+    job still succeeds. Under BABS the job log is the only place this shows.
+    With no NIDM directory at all, the run is standalone by choice.
+    """
+    nidm_root = nidm_input_dir if nidm_input_dir else bids_dir.parent / "NIDM"
+    if nidm_root.is_dir():
+        logger.warning(
+            f"No input NIDM for sub-{subject_id} in {nidm_root}: writing a "
+            "standalone nidm.ttl that is not linked to the subject's other NIDM "
+            "records"
+        )
+    else:
+        logger.info(
+            f"No input NIDM for sub-{subject_id} ({nidm_root} does not exist): "
+            "writing a standalone nidm.ttl"
+        )
+
+
 def process_subject(
     subject_id: str,
     bids_dir: Path,
@@ -429,6 +456,8 @@ def process_subject(
             logger=logger,
             session_id=session_id,
         )
+        if existing_nidm is None and not skip_nidm:
+            _log_missing_input_nidm(subject_id, nidm_input_dir, bids_dir, logger)
 
         # Step 2: Find MRIQC outputs
         # MRIQC keeps its own BIDS-derivative structure inside mriqc_dir, so the
