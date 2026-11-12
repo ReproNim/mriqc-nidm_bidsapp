@@ -241,7 +241,9 @@ directory is usually a datalad subdataset that was never installed
 the last value is the one used and checked. Without the option, a
 missing `<bids_dir>/../NIDM` is not an error, and neither is a directory that
 holds no file for the subject: the app then writes `nidm.ttl` without an input
-document.
+document. When the NIDM input directory exists (given or default) but has no
+file for the subject, the log has a WARNING naming the subject and the
+directory, and the job still succeeds.
 
 #### How IQM records are written
 
