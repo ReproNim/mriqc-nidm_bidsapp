@@ -178,8 +178,12 @@ def _nidm_input_dir(value: str) -> Path:
         os.stat(value)
     except OSError as e:
         if e.errno in (errno.ENOENT, errno.ENOTDIR):
-            # lstat() follows a link named with a trailing slash.
-            if os.path.islink(value.rstrip(os.sep) or value):
+            # With a trailing slash, lstat() follows a link, and stat() fails
+            # with ENOTDIR on a file that is there: look at the name itself.
+            bare = value.rstrip(os.sep)
+            if os.path.exists(bare):
+                raise argparse.ArgumentTypeError(f"{value!r} is not a directory")
+            if os.path.islink(bare):
                 raise argparse.ArgumentTypeError(
                     f"{value!r} is a broken symbolic link (when running in a "
                     "container, check that its target is mounted)"

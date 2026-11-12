@@ -170,11 +170,17 @@ class TestNidmInputDirValidation:
         a_file.write_text("")
         # Executable, so only the directory check can reject it.
         a_file.chmod(0o755)
+        link_to_file = tmp_path / "link_to_file"
+        link_to_file.symlink_to(a_file)
         cases = (
             (tmp_path / "absent", "does not exist"),
             # A component of the path is a file (ENOTDIR).
             (a_file / "NIDM", "does not exist"),
             (a_file, "is not a directory"),
+            # With a trailing slash stat() fails with ENOTDIR although the
+            # file is there; so does a link to it, which is not a broken link.
+            (f"{a_file}/", "is not a directory"),
+            (f"{link_to_file}/", "is not a directory"),
             ("/dev/null", "is not a directory"),
             # An unset variable in a wrapper; "." would be the working directory.
             ("", "must not be empty"),
