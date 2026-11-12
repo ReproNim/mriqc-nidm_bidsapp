@@ -203,12 +203,19 @@ class TestNidmInputDirValidation:
         out_dir = tmp_path / "out"
         link = tmp_path / "nidm_link"
         link.symlink_to(tmp_path / "gone")
-        result = _run_main(
-            monkeypatch, bids_dir, out_dir, "--nidm-input-dir", str(link)
-        )
-        self._assert_usage_error(
-            capsys, result, out_dir, "is a broken symbolic link"
-        )
+        # With a trailing slash too, where lstat() follows the link. In a
+        # container the link is there and its target is what is not mounted.
+        for given in (str(link), f"{link}/"):
+            result = _run_main(
+                monkeypatch, bids_dir, out_dir, "--nidm-input-dir", given
+            )
+            self._assert_usage_error(
+                capsys,
+                result,
+                out_dir,
+                "is a broken symbolic link (when running in a container, "
+                "check that its target is mounted)",
+            )
 
     def test_reports_a_directory_that_cannot_be_read(
         self, tmp_path, monkeypatch, capsys
