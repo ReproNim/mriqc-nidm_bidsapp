@@ -45,7 +45,11 @@ from .nidm_converter import (
 )
 from .check_pynidm import pynidm_installation
 from .nidm_converter.csv_to_nidm import check_csv2nidm_available
-from .nidm_converter.nidm_converter import TEMPORARY_PREFIX
+from .nidm_converter.nidm_converter import (
+    TEMPORARY_PREFIX,
+    dataset_nidm_path,
+    session_nidm_candidates,
+)
 from .nidm_converter.json_to_csv import combine_iqm_csvs, extract_session_label
 from .nidm_converter.nidm_merge import (
     check_iqm_records,
@@ -398,14 +402,8 @@ def _why_no_input_nidm(
     was never fetched) fails the lookup's is_file() test and is named first.
     """
     subject_root = nidm_root / f"sub-{subject_id}"
-    session_files = []
-    if session_id:
-        session_dir = subject_root / f"ses-{session_id}"
-        session_files = [
-            session_dir / "nidm.ttl",
-            session_dir / f"sub-{subject_id}_ses-{session_id}.ttl",
-        ]
-    for path in session_files + [nidm_root / "nidm.ttl"]:
+    session_files = session_nidm_candidates(nidm_root, subject_id, session_id)
+    for path in session_files + [dataset_nidm_path(nidm_root)]:
         if path.is_symlink() and not path.exists():
             return (
                 f"{path} is a broken symbolic link (if it is a git-annex "

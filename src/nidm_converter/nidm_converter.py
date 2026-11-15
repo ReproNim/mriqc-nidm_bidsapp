@@ -79,6 +79,25 @@ def _search_nidm_in_directory(
     return None
 
 
+def session_nidm_candidates(
+    nidm_root: Path, subject_id: str, session_id: Optional[str]
+) -> List[Path]:
+    """The session files detect_existing_nidm tries first, in order (none
+    without a session)."""
+    if not session_id:
+        return []
+    session_dir = nidm_root / f"sub-{subject_id}" / f"ses-{session_id}"
+    return [
+        session_dir / "nidm.ttl",
+        session_dir / f"sub-{subject_id}_ses-{session_id}.ttl",
+    ]
+
+
+def dataset_nidm_path(nidm_root: Path) -> Path:
+    """The dataset-level file detect_existing_nidm falls back to last."""
+    return nidm_root / "nidm.ttl"
+
+
 def detect_existing_nidm(
     subject_id: str,
     nidm_input_dir: Optional[Path] = None,
@@ -147,21 +166,16 @@ def detect_existing_nidm(
 
     subject_dir = nidm_root / f"sub-{subject_id}"
 
-    if session_id:
-        session_dir = subject_dir / f"ses-{session_id}"
-        for candidate in (
-            session_dir / "nidm.ttl",
-            session_dir / f"sub-{subject_id}_ses-{session_id}.ttl",
-        ):
-            if candidate.is_file():
-                logger.info(f"Found existing NIDM (session): {candidate}")
-                return candidate
+    for candidate in session_nidm_candidates(nidm_root, subject_id, session_id):
+        if candidate.is_file():
+            logger.info(f"Found existing NIDM (session): {candidate}")
+            return candidate
 
     found = _search_nidm_in_directory(subject_dir, logger)
     if found is not None:
         return found
 
-    dataset_level = nidm_root / "nidm.ttl"
+    dataset_level = dataset_nidm_path(nidm_root)
     if dataset_level.is_file():
         logger.info(f"Found existing NIDM (dataset-level): {dataset_level}")
         return dataset_level

@@ -417,6 +417,32 @@ def test_unfetched_annex_dataset_level_nidm_is_named(
     assert "has no sub-51209 directory" not in missing
 
 
+def test_every_file_the_lookup_tries_is_named_when_unfetched(
+    tmp_path, logger, caplog, monkeypatch
+):
+    """The warning and detect_existing_nidm share one candidate list: an
+    unfetched file at each place the lookup tries is named"""
+    from src.nidm_converter.nidm_converter import (
+        dataset_nidm_path,
+        session_nidm_candidates,
+    )
+
+    nidm_dir = tmp_path / "nidm"
+    candidates = session_nidm_candidates(nidm_dir, "51209", "1") + [
+        dataset_nidm_path(nidm_dir)
+    ]
+    for link in candidates:
+        caplog.clear()
+        shutil.rmtree(tmp_path, ignore_errors=True)
+        link.parent.mkdir(parents=True)
+        link.symlink_to(tmp_path / "annex" / "objects" / "absent")
+        with caplog.at_level(logging.DEBUG):
+            _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir)
+
+        [missing] = _input_nidm_warnings(caplog)
+        assert f"{link} is a broken symbolic link" in missing
+
+
 def test_unfetched_file_the_lookup_does_not_read_is_not_blamed(
     tmp_path, logger, caplog, monkeypatch
 ):
