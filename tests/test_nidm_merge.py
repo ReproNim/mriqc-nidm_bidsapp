@@ -443,6 +443,23 @@ def test_every_file_the_lookup_tries_is_named_when_unfetched(
         assert f"{link} is a broken symbolic link" in missing
 
 
+def test_link_to_a_directory_is_not_called_broken(
+    tmp_path, logger, caplog, monkeypatch
+):
+    """A session nidm.ttl that links to a directory resolves, so the lookup
+    skips it without it being an unfetched file"""
+    nidm_dir = tmp_path / "nidm"
+    link = nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl"
+    link.parent.mkdir(parents=True)
+    (tmp_path / "a_directory").mkdir()
+    link.symlink_to(tmp_path / "a_directory")
+    with caplog.at_level(logging.DEBUG):
+        _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir)
+
+    [missing] = _input_nidm_warnings(caplog)
+    assert "broken symbolic link" not in missing
+
+
 def test_unfetched_file_the_lookup_does_not_read_is_not_blamed(
     tmp_path, logger, caplog, monkeypatch
 ):
