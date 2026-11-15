@@ -242,8 +242,12 @@ the last value is the one used and checked. Without the option, a
 missing `<bids_dir>/../NIDM` is not an error, and neither is a directory that
 holds no file for the subject: the app then writes `nidm.ttl` without an input
 document. When the NIDM input directory exists (given or default) but has no
-file for the subject, the log has a WARNING naming the subject and the
-directory, and the job still succeeds.
+file for the job's subject or session, the log has a WARNING before the
+conversion that names the subject, the session and the reason (no directory
+for the subject, no file for the session, a per-session input on a run without
+`--session-label`, or a file that is a broken symbolic link, as git-annex
+leaves a file whose content was never fetched). The warning does not fail the
+job.
 
 #### How IQM records are written
 

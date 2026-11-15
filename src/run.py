@@ -388,29 +388,71 @@ def _iqm_jsons_of_session(
     return in_session
 
 
+def _why_no_input_nidm(
+    nidm_root: Path, subject_id: str, session_id: Optional[str]
+) -> str:
+    """The reason the lookup of detect_existing_nidm found no file in nidm_root."""
+    subject_root = nidm_root / f"sub-{subject_id}"
+    if not subject_root.is_dir():
+        return f"it has no sub-{subject_id} directory"
+    # The lookup skips a session file that is a broken symbolic link, which is
+    # how git-annex leaves a file whose content was never fetched.
+    searched = [subject_root]
+    if session_id:
+        searched.insert(0, subject_root / f"ses-{session_id}")
+    for directory in searched:
+        for path in sorted(directory.glob("*")):
+            if path.is_symlink() and not path.exists():
+                return (
+                    f"{path} is a broken symbolic link (if it is a git-annex "
+                    "file, 'datalad get' fetches its content)"
+                )
+    if session_id:
+        return (
+            f"{subject_root} has no NIDM file for ses-{session_id}, and none "
+            "for the whole subject"
+        )
+    if any(subject_root.glob("ses-*/*.ttl")):
+        return (
+            f"{subject_root} keeps its NIDM per session; pass --session-label "
+            "to add the IQMs to one session's NIDM"
+        )
+    return f"{subject_root} has no NIDM file"
+
+
 def _log_missing_input_nidm(
     subject_id: str,
+    session_id: Optional[str],
     nidm_input_dir: Optional[Path],
     bids_dir: Path,
     logger: logging.Logger,
 ) -> None:
-    """Say that a subject gets a standalone nidm.ttl because no input NIDM was found.
+    """Say that a job writes a standalone nidm.ttl because no input NIDM was found.
 
-    A NIDM directory that exists but has no file for this subject is a
-    warning: the dataset has NIDM, this subject is missing from it, and the
+    A NIDM directory that exists but has no file for this job is a warning:
+    the dataset has NIDM, this subject or session is missing from it, and the
     job still succeeds. Under BABS the job log is the only place this shows.
     With no NIDM directory at all, the run is standalone by choice.
     """
     nidm_root = nidm_input_dir if nidm_input_dir else bids_dir.parent / "NIDM"
+    job = f"sub-{subject_id}" + (f" ses-{session_id}" if session_id else "")
+    standalone = (
+        "writing a standalone nidm.ttl that is not linked to the subject's "
+        "other NIDM records"
+    )
     if nidm_root.is_dir():
+        reason = _why_no_input_nidm(nidm_root, subject_id, session_id)
         logger.warning(
-            f"No input NIDM for sub-{subject_id} in {nidm_root}: writing a "
-            "standalone nidm.ttl that is not linked to the subject's other NIDM "
-            "records"
+            f"No input NIDM for {job} in {nidm_root}: {reason}; {standalone}"
+        )
+    elif os.path.lexists(nidm_root):
+        logger.warning(
+            f"No input NIDM for {job}: {nidm_root} is not a directory (or is a "
+            f"broken symbolic link); {standalone}"
         )
     else:
         logger.info(
-            f"No input NIDM for sub-{subject_id} ({nidm_root} does not exist): "
+            f"No input NIDM for {job} ({nidm_root} does not exist): "
             "writing a standalone nidm.ttl"
         )
 
@@ -456,8 +498,6 @@ def process_subject(
             logger=logger,
             session_id=session_id,
         )
-        if existing_nidm is None and not skip_nidm:
-            _log_missing_input_nidm(subject_id, nidm_input_dir, bids_dir, logger)
 
         # Step 2: Find MRIQC outputs
         # MRIQC keeps its own BIDS-derivative structure inside mriqc_dir, so the
@@ -534,6 +574,14 @@ def process_subject(
                 "it with bidsmri2nidm."
             )
             return False
+
+        # Logged here, once every check that can end the job without a
+        # nidm.ttl has passed, so it does not announce a file that is never
+        # written.
+        if existing_nidm is None:
+            _log_missing_input_nidm(
+                subject_id, session_id, nidm_input_dir, bids_dir, logger
+            )
 
         # NIDM output sits directly in the subject directory, beside the analysis
         # results, and is ALWAYS named nidm.ttl -- subject identity is carried by

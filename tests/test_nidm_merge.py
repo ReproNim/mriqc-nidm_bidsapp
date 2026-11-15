@@ -353,56 +353,136 @@ def _assert_clean_mriqc_output(ttl: Path, caplog):
     assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []
 
 
-def _lookup_only(tmp_path, logger, nidm_input_dir, skip_nidm=False):
-    """process_subject up to the input NIDM lookup: with no MRIQC output it
-    returns False right after it."""
-    bids = tmp_path / "bids"
-    bids.mkdir(exist_ok=True)
+def _up_to_conversion(tmp_path, logger, monkeypatch, nidm_input_dir, *,
+                      session_id="1", stems=None, skip_nidm=False):
+    """process_subject until the conversion starts: a stub dictionary lookup
+    stops it there, after every check that can end the job early."""
+    def stop():
+        raise RuntimeError("stopped where the conversion starts")
+
+    monkeypatch.setattr("src.run.get_mriqc_dictionary", stop)
+    ses = session_id or "1"
+    stems = stems or [f"sub-51209_ses-{ses}_run-1_T1w"]
     output_dir = tmp_path / "out"
     subject_dir = output_dir / "sub-51209"
+    if session_id:
+        subject_dir = subject_dir / f"ses-{session_id}"
+    bids = tmp_path / "bids"
+    bids.mkdir(exist_ok=True)
     return process_subject(
         subject_id="51209", bids_dir=bids, output_dir=output_dir,
-        subject_dir=subject_dir, mriqc_dir=subject_dir / "mriqc", session_id=None,
-        nidm_input_dir=nidm_input_dir, skip_mriqc=True, skip_nidm=skip_nidm,
-        logger=logger,
+        subject_dir=subject_dir, mriqc_dir=_mriqc_tree(subject_dir, stems),
+        session_id=session_id, nidm_input_dir=nidm_input_dir, skip_mriqc=True,
+        skip_nidm=skip_nidm, logger=logger,
     )
 
 
-def _warnings(caplog):
-    return [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+def _input_nidm_warnings(caplog):
+    return [
+        r.getMessage() for r in caplog.records
+        if r.levelno == logging.WARNING and "input NIDM" in r.getMessage()
+    ]
 
 
-def test_subject_missing_from_the_nidm_input_is_a_warning(tmp_path, logger, caplog):
+def test_subject_missing_from_the_nidm_input_is_a_warning(
+    tmp_path, logger, caplog, monkeypatch
+):
     """An input NIDM directory without this subject: the output is standalone,
     and the job log says so (under BABS it is the only sign)"""
     nidm_dir = tmp_path / "nidm"
     _write(nidm_dir / "sub-00001" / "nidm.ttl", "")
     with caplog.at_level(logging.DEBUG):
-        _lookup_only(tmp_path, logger, nidm_dir)
+        _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir)
 
-    [missing] = [w for w in _warnings(caplog) if "input NIDM" in w]
-    assert "sub-51209" in missing
+    [missing] = _input_nidm_warnings(caplog)
+    assert "sub-51209 ses-1" in missing
     assert str(nidm_dir) in missing
+    assert "has no sub-51209 directory" in missing
 
 
 def test_subject_missing_from_the_default_nidm_location_is_a_warning(
-    tmp_path, logger, caplog
+    tmp_path, logger, caplog, monkeypatch
 ):
     """The same for the default <bids_dir>/../NIDM when it exists"""
     _write(tmp_path / "NIDM" / "sub-00001" / "nidm.ttl", "")
     with caplog.at_level(logging.DEBUG):
-        _lookup_only(tmp_path, logger, None)
+        _up_to_conversion(tmp_path, logger, monkeypatch, None)
 
-    [missing] = [w for w in _warnings(caplog) if "input NIDM" in w]
-    assert "sub-51209" in missing
+    [missing] = _input_nidm_warnings(caplog)
+    assert "sub-51209 ses-1" in missing
+    assert str(tmp_path / "NIDM") in missing
 
 
-def test_no_nidm_directory_at_all_is_not_a_warning(tmp_path, logger, caplog):
+def test_session_missing_from_the_nidm_input_names_the_session(
+    tmp_path, logger, caplog, monkeypatch
+):
+    """sub-<id>/ is in the input but holds only another session: the warning
+    names this job's session, not a missing subject"""
+    nidm_dir = tmp_path / "nidm"
+    _write(nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl", "")
+    with caplog.at_level(logging.DEBUG):
+        _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir, session_id="2")
+
+    [missing] = _input_nidm_warnings(caplog)
+    assert "sub-51209 ses-2" in missing
+    assert "no NIDM file for ses-2" in missing
+    assert "has no sub-51209 directory" not in missing
+
+
+def test_subject_level_run_on_per_session_nidm_points_to_session_label(
+    tmp_path, logger, caplog, monkeypatch
+):
+    """A subject-level run on a per-session input (UCLA_Long layout) finds
+    nothing at subject level; the remedy is --session-label"""
+    nidm_dir = tmp_path / "nidm"
+    _write(nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl", "")
+    with caplog.at_level(logging.DEBUG):
+        _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir, session_id=None)
+
+    [missing] = _input_nidm_warnings(caplog)
+    assert missing.startswith("No input NIDM for sub-51209 in")
+    assert "--session-label" in missing
+
+
+def test_unfetched_annex_session_file_is_named(tmp_path, logger, caplog, monkeypatch):
+    """A session file that is a broken symbolic link (git-annex content never
+    fetched) is named in the warning rather than reported as missing"""
+    nidm_dir = tmp_path / "nidm"
+    link = nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(tmp_path / "annex" / "objects" / "absent")
+    with caplog.at_level(logging.DEBUG):
+        _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir)
+
+    [missing] = _input_nidm_warnings(caplog)
+    assert f"{link} is a broken symbolic link" in missing
+    assert "datalad get" in missing
+
+
+def test_default_nidm_location_that_is_a_file_is_a_warning(
+    tmp_path, logger, caplog, monkeypatch
+):
+    """A regular file at <bids_dir>/../NIDM is not a standalone run by choice"""
+    _write(tmp_path / "NIDM", "")
+    with caplog.at_level(logging.DEBUG):
+        _up_to_conversion(tmp_path, logger, monkeypatch, None)
+
+    [missing] = _input_nidm_warnings(caplog)
+    assert "is not a directory" in missing
+    assert not any(
+        "No input NIDM" in r.getMessage() and r.levelno == logging.INFO
+        for r in caplog.records
+    )
+
+
+def test_no_nidm_directory_at_all_is_not_a_warning(
+    tmp_path, logger, caplog, monkeypatch
+):
     """A run with no NIDM input anywhere is a standalone run by choice"""
     with caplog.at_level(logging.DEBUG):
-        _lookup_only(tmp_path, logger, None)
+        _up_to_conversion(tmp_path, logger, monkeypatch, None)
 
-    assert [w for w in _warnings(caplog) if "input NIDM" in w] == []
+    assert _input_nidm_warnings(caplog) == []
     assert any(
         "No input NIDM" in r.getMessage() and r.levelno == logging.INFO
         for r in caplog.records
@@ -410,15 +490,37 @@ def test_no_nidm_directory_at_all_is_not_a_warning(tmp_path, logger, caplog):
 
 
 def test_skipped_conversion_does_not_warn_about_the_nidm_input(
-    tmp_path, logger, caplog
+    tmp_path, logger, caplog, monkeypatch
 ):
     """--skip-nidm-conversion writes no nidm.ttl, so a missing input does not matter"""
     nidm_dir = tmp_path / "nidm"
     _write(nidm_dir / "sub-00001" / "nidm.ttl", "")
     with caplog.at_level(logging.DEBUG):
-        _lookup_only(tmp_path, logger, nidm_dir, skip_nidm=True)
+        _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir, skip_nidm=True)
 
-    assert [w for w in _warnings(caplog) if "input NIDM" in w] == []
+    assert _input_nidm_warnings(caplog) == []
+
+
+def test_job_that_ends_before_the_conversion_does_not_warn(
+    tmp_path, logger, caplog
+):
+    """With no MRIQC output the job fails without writing nidm.ttl, so it does
+    not announce a standalone one"""
+    nidm_dir = tmp_path / "nidm"
+    _write(nidm_dir / "sub-00001" / "nidm.ttl", "")
+    bids = tmp_path / "bids"
+    bids.mkdir()
+    subject_dir = tmp_path / "out" / "sub-51209"
+    with caplog.at_level(logging.DEBUG):
+        ok = process_subject(
+            subject_id="51209", bids_dir=bids, output_dir=tmp_path / "out",
+            subject_dir=subject_dir, mriqc_dir=subject_dir / "mriqc",
+            session_id=None, nidm_input_dir=nidm_dir, skip_mriqc=True,
+            skip_nidm=False, logger=logger,
+        )
+
+    assert ok is False
+    assert not any("No input NIDM" in r.getMessage() for r in caplog.records)
 
 
 @needs_csv2nidm
