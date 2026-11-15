@@ -391,26 +391,33 @@ def _iqm_jsons_of_session(
 def _why_no_input_nidm(
     nidm_root: Path, subject_id: str, session_id: Optional[str]
 ) -> str:
-    """The reason the lookup of detect_existing_nidm found no file in nidm_root."""
+    """The reason the lookup of detect_existing_nidm found no file in nidm_root.
+
+    It looks at the files that lookup tries, in the same order. A file there
+    that is a broken symbolic link (how git-annex leaves a file whose content
+    was never fetched) fails the lookup's is_file() test and is named first.
+    """
     subject_root = nidm_root / f"sub-{subject_id}"
+    session_files = []
+    if session_id:
+        session_dir = subject_root / f"ses-{session_id}"
+        session_files = [
+            session_dir / "nidm.ttl",
+            session_dir / f"sub-{subject_id}_ses-{session_id}.ttl",
+        ]
+    for path in session_files + [nidm_root / "nidm.ttl"]:
+        if path.is_symlink() and not path.exists():
+            return (
+                f"{path} is a broken symbolic link (if it is a git-annex "
+                "file, 'datalad get' fetches its content)"
+            )
     if not subject_root.is_dir():
-        return f"it has no sub-{subject_id} directory"
-    # The lookup skips a session file that is a broken symbolic link, which is
-    # how git-annex leaves a file whose content was never fetched.
-    searched = [subject_root]
+        return f"it has no sub-{subject_id} directory and no nidm.ttl"
     if session_id:
-        searched.insert(0, subject_root / f"ses-{session_id}")
-    for directory in searched:
-        for path in sorted(directory.glob("*")):
-            if path.is_symlink() and not path.exists():
-                return (
-                    f"{path} is a broken symbolic link (if it is a git-annex "
-                    "file, 'datalad get' fetches its content)"
-                )
-    if session_id:
+        names = " or ".join(str(p.relative_to(subject_root)) for p in session_files)
         return (
-            f"{subject_root} has no NIDM file for ses-{session_id}, and none "
-            "for the whole subject"
+            f"{subject_root} has no {names}, and no NIDM file for the whole "
+            "subject"
         )
     if any(subject_root.glob("ses-*/*.ttl")):
         return (
@@ -443,16 +450,16 @@ def _log_missing_input_nidm(
     if nidm_root.is_dir():
         reason = _why_no_input_nidm(nidm_root, subject_id, session_id)
         logger.warning(
-            f"No input NIDM for {job} in {nidm_root}: {reason}; {standalone}"
+            f"No NIDM input for {job} in {nidm_root}: {reason}; {standalone}"
         )
     elif os.path.lexists(nidm_root):
         logger.warning(
-            f"No input NIDM for {job}: {nidm_root} is not a directory (or is a "
+            f"No NIDM input for {job}: {nidm_root} is not a directory (or is a "
             f"broken symbolic link); {standalone}"
         )
     else:
         logger.info(
-            f"No input NIDM for {job} ({nidm_root} does not exist): "
+            f"No NIDM input for {job} ({nidm_root} does not exist): "
             "writing a standalone nidm.ttl"
         )
 
@@ -575,9 +582,9 @@ def process_subject(
             )
             return False
 
-        # Logged here, once every check that can end the job without a
-        # nidm.ttl has passed, so it does not announce a file that is never
-        # written.
+        # Logged here, after the checks that end the job before any conversion
+        # starts, so a job stopped by them does not announce a standalone
+        # nidm.ttl. A conversion that fails later can still leave none.
         if existing_nidm is None:
             _log_missing_input_nidm(
                 subject_id, session_id, nidm_input_dir, bids_dir, logger

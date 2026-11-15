@@ -380,7 +380,7 @@ def _up_to_conversion(tmp_path, logger, monkeypatch, nidm_input_dir, *,
 def _input_nidm_warnings(caplog):
     return [
         r.getMessage() for r in caplog.records
-        if r.levelno == logging.WARNING and "input NIDM" in r.getMessage()
+        if r.levelno == logging.WARNING and "NIDM input" in r.getMessage()
     ]
 
 
@@ -398,6 +398,41 @@ def test_subject_missing_from_the_nidm_input_is_a_warning(
     assert "sub-51209 ses-1" in missing
     assert str(nidm_dir) in missing
     assert "has no sub-51209 directory" in missing
+
+
+def test_unfetched_annex_dataset_level_nidm_is_named(
+    tmp_path, logger, caplog, monkeypatch
+):
+    """The lookup's last fallback, <nidm dir>/nidm.ttl, as an unfetched
+    git-annex file is named rather than reported as a missing subject"""
+    nidm_dir = tmp_path / "nidm"
+    nidm_dir.mkdir()
+    link = nidm_dir / "nidm.ttl"
+    link.symlink_to(tmp_path / "annex" / "objects" / "absent")
+    with caplog.at_level(logging.DEBUG):
+        _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir)
+
+    [missing] = _input_nidm_warnings(caplog)
+    assert f"{link} is a broken symbolic link" in missing
+    assert "has no sub-51209 directory" not in missing
+
+
+def test_unfetched_file_the_lookup_does_not_read_is_not_blamed(
+    tmp_path, logger, caplog, monkeypatch
+):
+    """A broken link that is not one of the files the lookup tries (here a
+    sidecar in the session directory) is not named as the cause"""
+    nidm_dir = tmp_path / "nidm"
+    session_dir = nidm_dir / "sub-51209" / "ses-1"
+    session_dir.mkdir(parents=True)
+    (session_dir / "sub-51209_ses-1_T1w.json").symlink_to(tmp_path / "absent")
+    _write(session_dir / "extra.ttl", "")
+    with caplog.at_level(logging.DEBUG):
+        _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir)
+
+    [missing] = _input_nidm_warnings(caplog)
+    assert "broken symbolic link" not in missing
+    assert "has no ses-1/nidm.ttl or ses-1/sub-51209_ses-1.ttl" in missing
 
 
 def test_subject_missing_from_the_default_nidm_location_is_a_warning(
@@ -425,7 +460,7 @@ def test_session_missing_from_the_nidm_input_names_the_session(
 
     [missing] = _input_nidm_warnings(caplog)
     assert "sub-51209 ses-2" in missing
-    assert "no NIDM file for ses-2" in missing
+    assert "has no ses-2/nidm.ttl or ses-2/sub-51209_ses-2.ttl" in missing
     assert "has no sub-51209 directory" not in missing
 
 
@@ -440,7 +475,7 @@ def test_subject_level_run_on_per_session_nidm_points_to_session_label(
         _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir, session_id=None)
 
     [missing] = _input_nidm_warnings(caplog)
-    assert missing.startswith("No input NIDM for sub-51209 in")
+    assert missing.startswith("No NIDM input for sub-51209 in")
     assert "--session-label" in missing
 
 
@@ -470,7 +505,7 @@ def test_default_nidm_location_that_is_a_file_is_a_warning(
     [missing] = _input_nidm_warnings(caplog)
     assert "is not a directory" in missing
     assert not any(
-        "No input NIDM" in r.getMessage() and r.levelno == logging.INFO
+        "No NIDM input" in r.getMessage() and r.levelno == logging.INFO
         for r in caplog.records
     )
 
@@ -484,7 +519,7 @@ def test_no_nidm_directory_at_all_is_not_a_warning(
 
     assert _input_nidm_warnings(caplog) == []
     assert any(
-        "No input NIDM" in r.getMessage() and r.levelno == logging.INFO
+        "No NIDM input" in r.getMessage() and r.levelno == logging.INFO
         for r in caplog.records
     )
 
@@ -520,7 +555,7 @@ def test_job_that_ends_before_the_conversion_does_not_warn(
         )
 
     assert ok is False
-    assert not any("No input NIDM" in r.getMessage() for r in caplog.records)
+    assert not any("No NIDM input" in r.getMessage() for r in caplog.records)
 
 
 @needs_csv2nidm
