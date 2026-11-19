@@ -76,8 +76,8 @@ def test_mixed_run_column_keeps_run_numbers(tmp_path, logger, with_input):
     assert ok is True
     assert _record_values(ttl, NIDM.AcquisitionObject) == {
         "sub-51209_ses-1_T1w.json": [],
-        "sub-51209_ses-1_task-rest_run-1_bold.json": [("1", XSD.int)],
-        "sub-51209_ses-1_task-rest_run-2_bold.json": [("2", XSD.int)],
+        "sub-51209_ses-1_task-rest_run-1_bold.json": [("1", XSD.integer)],
+        "sub-51209_ses-1_task-rest_run-2_bold.json": [("2", XSD.integer)],
     }
     assert '"1.0"' not in ttl.read_text()
     assert '"2.0"' not in ttl.read_text()
@@ -108,14 +108,79 @@ def test_numeric_session_task_and_acq_labels_keep_their_text(tmp_path, logger):
 
     t1w, bold1, bold2 = (f"{s}.json" for s in stems)
     assert _record_values(ttl, BIDS.session_number) == {
-        name: [("01", XSD.string)] for name in (t1w, bold1, bold2)
+        name: [("01", None)] for name in (t1w, bold1, bold2)
     }
     assert _record_values(ttl, NIDM.Task) == {
-        t1w: [], bold1: [("1", XSD.string)], bold2: [("1", XSD.string)],
+        t1w: [], bold1: [("1", None)], bold2: [("1", None)],
     }
     assert _record_values(ttl, _acq_property(ttl)) == {
-        t1w: [], bold1: [("1", XSD.string)], bold2: [],
+        t1w: [], bold1: [("1", None)], bold2: [],
     }
     assert _record_values(ttl, NIDM.AcquisitionObject) == {
-        t1w: [], bold1: [("1", XSD.int)], bold2: [("2", XSD.int)],
+        t1w: [], bold1: [("1", XSD.integer)], bold2: [("2", XSD.integer)],
     }
+
+
+# PyNIDM's run lookup (nidm/linkml/experiment/query.py,
+# GetAcquisitionEntityFromSubjectSessionRun) puts the run into its SPARQL as
+# a bare number: ``nidm:AcquisitionObject {run}``.
+RUN_PATTERN = """
+    prefix nidm: <http://purl.org/nidash/nidm#>
+    prefix prov: <http://www.w3.org/ns/prov#>
+    select ?loc where { ?e nidm:AcquisitionObject %d ; prov:Location ?loc . }
+"""
+
+
+def _locations_with_run(ttl: Path, run: int):
+    g = rdflib.Graph()
+    g.parse(ttl, format="turtle")
+    return sorted(str(r.loc).rsplit("/", 1)[-1] for r in g.query(RUN_PATTERN % run))
+
+
+@needs_csv2nidm
+def test_pynidm_run_pattern_finds_the_iqm_record(tmp_path, logger):
+    """The `nidm:AcquisitionObject 1` pattern PyNIDM builds finds run 1's IQMs"""
+    ok, ttl = _run(tmp_path, MIXED_RUN_STEMS, tmp_path / "nidm", logger)
+
+    assert ok is True
+    assert _locations_with_run(ttl, 1) == ["sub-51209_ses-1_task-rest_run-1_bold.json"]
+    assert _locations_with_run(ttl, 2) == ["sub-51209_ses-1_task-rest_run-2_bold.json"]
+
+
+SESSION_JOIN = """
+    prefix bids: <http://bids.neuroimaging.io/>
+    prefix nidm: <http://purl.org/nidash/nidm#>
+    prefix prov: <http://www.w3.org/ns/prov#>
+    select ?loc ?ses where {
+        ?ses a nidm:Session ; bids:session_number ?label .
+        ?rec prov:Location ?loc ; bids:session_number ?label .
+    }
+"""
+
+
+@needs_csv2nidm
+def test_session_label_joins_bidsmri2nidm_session(tmp_path, logger):
+    """An IQM record's session number joins the Session bidsmri2nidm wrote"""
+    from nidm.linkml.experiment.tools.bidsmri2nidm import _lit
+
+    json_file = tmp_path / "sub-01_ses-01_T1w.json"
+    json_file.write_text(json.dumps(
+        {"cjv": 0.5, "provenance": {"software": "mriqc", "version": "25.0.0"}}
+    ))
+    csv_path, software_csv = convert_mriqc_json_to_csv(
+        json_file, tmp_path / "iqm.csv", logger
+    )
+    ttl = tmp_path / "nidm.ttl"
+    _write_iqm_nidm([csv_path], software_csv, get_mriqc_dictionary(), tmp_path,
+                    None, ttl, logger)
+
+    g = rdflib.Graph()
+    g.parse(ttl, format="turtle")
+    # The triple bidsmri2nidm writes for session ses-01 (bidsmri2nidm.py, the
+    # imaging-session loop), with its own literal helper.
+    session = rdflib.URIRef("http://iri.nidash.org/session-01")
+    g.add((session, rdflib.RDF.type, NIDM.Session))
+    g.add((session, BIDS.session_number, _lit("01")))
+
+    rows = [(str(r.loc).rsplit("/", 1)[-1], r.ses) for r in g.query(SESSION_JOIN)]
+    assert rows == [("sub-01_ses-01_T1w.json", session)]

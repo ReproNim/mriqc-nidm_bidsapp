@@ -277,10 +277,20 @@ so a label column that looks numeric is read as numbers. When a job has images
 with and without a run (T1w next to `run-1` BOLD), run 1 came out as the text
 `"1.0"`; a session label `01` came out as `"1"`, and a numeric `acq` label as
 `1.0` (`xsd:float`). Before writing `nidm.ttl`, the app sets each IQM record's
-labels from the CSV, which keeps them as text: the run as
-`nidm:AcquisitionObject` with `xsd:int` (what csv2nidm writes when no image
-lacks a run), and session (`bids:session_number`), task (`nidm:Task`) and the
-`acq`, `ce` and `rec` labels as `xsd:string` with the text of the filename.
+labels from the CSV:
+
+- the run as `nidm:AcquisitionObject`, an `xsd:integer` in canonical form
+  (`run-01` gives `1`), which PyNIDM's run lookup (its SPARQL pattern
+  `nidm:AcquisitionObject 1`) finds. A run label that is not a whole number
+  is kept as text;
+- session (`bids:session_number`), task (`nidm:Task`) and the `acq`, `ce` and
+  `rec` labels as plain literals with the text of the filename, the form
+  bidsmri2nidm uses for the session number, so a SPARQL join on the session
+  matches the input's Session.
+
+An empty label, and the `None` task of anatomical images, gets no triple. If
+csv2nidm's records and the CSV rows do not correspond one to one (by the IQM
+JSON path), the job fails rather than writing labels it could not check.
 
 A job fails (non-zero exit), and writes no `nidm.ttl`, when csv2nidm fails,
 when an IQM record matches no acquisition or several, or when the result does
