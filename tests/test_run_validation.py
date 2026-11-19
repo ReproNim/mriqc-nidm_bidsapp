@@ -583,3 +583,63 @@ class TestEmptyPathArguments:
         }
         kwargs = mock_process.call_args.kwargs
         assert (kwargs["bids_dir"], kwargs["output_dir"]) == (bids_dir, out_dir)
+
+
+class TestUnfetchedNidmInput:
+    """An input NIDM file that is a broken symbolic link (an unfetched
+    git-annex file) fails its subject before MRIQC runs, and writes no
+    nidm.ttl for it."""
+
+    def _run(self, monkeypatch, bids_dir, out_dir, *options):
+        monkeypatch.setattr("src.run.check_csv2nidm_available", lambda: True)
+        monkeypatch.setattr(
+            "src.run.pynidm_installation", lambda: ("test", "test")
+        )
+        return _run_main(monkeypatch, bids_dir, out_dir, *options)
+
+    def _two_subjects(self, tmp_path):
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        anat = bids_dir / "sub-02" / "anat"
+        anat.mkdir(parents=True)
+        (anat / "sub-02_T1w.nii.gz").write_bytes(b"")
+        nidm = tmp_path / "nidm"
+        link = nidm / "sub-01" / "nidm.ttl"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(Path("..") / ".git" / "annex" / "objects" / "absent")
+        (nidm / "sub-02").mkdir()
+        (nidm / "sub-02" / "nidm.ttl").write_text("")
+        return bids_dir, nidm, link
+
+    def test_fails_the_subject_before_mriqc(self, tmp_path, monkeypatch, caplog):
+        bids_dir, nidm, link = self._two_subjects(tmp_path)
+        exit_code, mock_wrapper, mock_process = self._run(
+            monkeypatch, bids_dir, tmp_path / "out", "--nidm-input-dir", str(nidm)
+        )
+        assert exit_code == 1
+        run = mock_wrapper.return_value.process_participant
+        assert [c.kwargs["subject_id"] for c in run.call_args_list] == ["02"]
+        assert [c.kwargs["subject_id"] for c in mock_process.call_args_list] == ["02"]
+        assert f"datalad get {link}" in caplog.text
+        assert not (tmp_path / "out" / "sub-01" / "nidm.ttl").exists()
+
+    def test_fails_before_mriqc_with_a_single_subject(
+        self, tmp_path, monkeypatch
+    ):
+        bids_dir, nidm, _ = self._two_subjects(tmp_path)
+        exit_code, mock_wrapper, mock_process = self._run(
+            monkeypatch, bids_dir, tmp_path / "out", "--nidm-input-dir", str(nidm),
+            "--participant-label", "01",
+        )
+        assert exit_code == 1
+        mock_wrapper.return_value.process_participant.assert_not_called()
+        mock_process.assert_not_called()
+
+    def test_skip_nidm_conversion_does_not_look(self, tmp_path, monkeypatch):
+        bids_dir, nidm, _ = self._two_subjects(tmp_path)
+        exit_code, mock_wrapper, mock_process = self._run(
+            monkeypatch, bids_dir, tmp_path / "out", "--nidm-input-dir", str(nidm),
+            "--participant-label", "01", "--skip-nidm-conversion",
+        )
+        assert exit_code == 0
+        mock_wrapper.return_value.process_participant.assert_called_once()
+        mock_process.assert_called_once()

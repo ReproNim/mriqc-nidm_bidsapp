@@ -37,6 +37,7 @@ from .utils import (
     create_dataset_description,
 )
 from .nidm_converter import (
+    NIDMInputNotRetrieved,
     convert_csv_to_nidm,
     convert_mriqc_json_to_csv,
     detect_existing_nidm,
@@ -47,7 +48,6 @@ from .check_pynidm import pynidm_installation
 from .nidm_converter.csv_to_nidm import check_csv2nidm_available
 from .nidm_converter.nidm_converter import (
     TEMPORARY_PREFIX,
-    dataset_nidm_path,
     session_nidm_candidates,
 )
 from .nidm_converter.json_to_csv import combine_iqm_csvs, extract_session_label
@@ -397,18 +397,11 @@ def _why_no_input_nidm(
 ) -> str:
     """The reason the lookup of detect_existing_nidm found no file in nidm_root.
 
-    It looks at the files that lookup tries, in the same order. A file there
-    that is a broken symbolic link (how git-annex leaves a file whose content
-    was never fetched) fails the lookup's is_file() test and is named first.
+    A broken symbolic link among the files that lookup tries is not a reason
+    here: the lookup raises NIDMInputNotRetrieved for it and the job fails.
     """
     subject_root = nidm_root / f"sub-{subject_id}"
     session_files = session_nidm_candidates(nidm_root, subject_id, session_id)
-    for path in session_files + [dataset_nidm_path(nidm_root)]:
-        if path.is_symlink() and not path.exists():
-            return (
-                f"{path} is a broken symbolic link (if it is a git-annex "
-                "file, 'datalad get' fetches its content)"
-            )
     if not subject_root.is_dir():
         return f"it has no sub-{subject_id} directory and no nidm.ttl"
     if session_id:
@@ -462,6 +455,27 @@ def _log_missing_input_nidm(
         )
 
 
+def find_input_nidm(
+    subject_id: str,
+    session_id: Optional[str],
+    nidm_input_dir: Optional[Path],
+    bids_dir: Path,
+    logger: logging.Logger,
+) -> Optional[Path]:
+    """The input NIDM file for the job, or None (detect_existing_nidm's lookup).
+
+    Raises NIDMInputNotRetrieved when the file the lookup would use is a
+    broken symbolic link.
+    """
+    return detect_existing_nidm(
+        subject_id=subject_id,
+        nidm_input_dir=nidm_input_dir,
+        bids_dir=bids_dir if not nidm_input_dir else None,
+        logger=logger,
+        session_id=session_id,
+    )
+
+
 def process_subject(
     subject_id: str,
     bids_dir: Path,
@@ -495,16 +509,7 @@ def process_subject(
     logger.info(f"Processing subject: sub-{subject_id}")
 
     try:
-        # Step 1: Detect existing NIDM input
-        existing_nidm = detect_existing_nidm(
-            subject_id=subject_id,
-            nidm_input_dir=nidm_input_dir,
-            bids_dir=bids_dir if not nidm_input_dir else None,
-            logger=logger,
-            session_id=session_id,
-        )
-
-        # Step 2: Find MRIQC outputs
+        # Step 1: Find MRIQC outputs
         # MRIQC keeps its own BIDS-derivative structure inside mriqc_dir, so the
         # IQM JSONs live at <mriqc_dir>/sub-<id>/[ses-<x>/]{anat,func}/*.json.
         subject_mriqc_dir = mriqc_dir / f"sub-{subject_id}"
@@ -545,6 +550,19 @@ def process_subject(
         if skip_nidm:
             logger.info("Skipping NIDM conversion (--skip-nidm-conversion flag)")
             return True
+
+        # Step 2: Detect existing NIDM input. Only after the --skip-nidm
+        # return: a run that writes no NIDM does not read the input either,
+        # so an unfetched input file must not fail it. main() looks the input
+        # up before MRIQC runs as well; this repeats it for callers that come
+        # here directly and for a file that changed in between.
+        try:
+            existing_nidm = find_input_nidm(
+                subject_id, session_id, nidm_input_dir, bids_dir, logger
+            )
+        except NIDMInputNotRetrieved as e:
+            logger.error(f"sub-{subject_id}: {e}")
+            return False
 
         # Step 3: Process each MRIQC JSON file.
         # The session is decided by the caller (--session-label), not sniffed from
@@ -938,6 +956,23 @@ MRIQC Arguments:
 
     logger.info(f"Processing {len(subjects)} subject(s): {', '.join(subjects)}")
 
+    # Subjects whose input NIDM file is a broken symbolic link (an unfetched
+    # git-annex file). Looked up before MRIQC, so the job fails in seconds
+    # rather than after the MRIQC run, and no standalone nidm.ttl is written
+    # for them. With --skip-nidm-conversion the input is not read, so it is
+    # not looked up.
+    nidm_not_retrieved = set()
+    if not args.skip_nidm_conversion:
+        for subject_id in subjects:
+            try:
+                find_input_nidm(
+                    subject_id, session_id, args.nidm_input_dir, args.bids_dir,
+                    logger,
+                )
+            except NIDMInputNotRetrieved as e:
+                logger.error(f"sub-{subject_id}: {e}")
+                nidm_not_retrieved.add(subject_id)
+
     # Subjects whose MRIQC run failed; they are not converted to NIDM.
     mriqc_failed = set()
 
@@ -961,6 +996,8 @@ MRIQC Arguments:
             # at its output root (dataset_description.json, .bidsignore, logs/,
             # the *_T1w.html reports) can collide across subjects.
             for subject_id in subjects:
+                if subject_id in nidm_not_retrieved:
+                    continue
                 subject_dir, mriqc_dir = _dirs_for(subject_id)
                 logger.info(f"Running MRIQC for sub-{subject_id} → {mriqc_dir}")
                 filter_name = f"bids_filter_sub-{subject_id}"
@@ -1020,6 +1057,13 @@ MRIQC Arguments:
     # Process each subject through NIDM conversion
     success_count = 0
     for subject_id in subjects:
+        if subject_id in nidm_not_retrieved:
+            logger.error(
+                f"sub-{subject_id} failed: its input NIDM file is not "
+                "available (see above); MRIQC was not run and no nidm.ttl "
+                "was written"
+            )
+            continue
         if subject_id in mriqc_failed:
             logger.error(
                 f"No IQMs for sub-{subject_id}: MRIQC was not run, failed or "

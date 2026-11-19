@@ -244,10 +244,22 @@ holds no file for the subject: the app then writes `nidm.ttl` without an input
 document. When the NIDM input directory exists (given or default) but has no
 file for the job's subject or session, the log has a WARNING before the
 conversion that names the subject, the session and the reason (no directory
-for the subject, no file for the session, a per-session input on a run without
-`--session-label`, or a file that is a broken symbolic link, as git-annex
-leaves a file whose content was never fetched). The warning does not fail the
-job.
+for the subject, no file for the session, or a per-session input on a run
+without `--session-label`). The warning does not fail the job.
+
+A broken symbolic link counts as a file that exists. When the file the lookup
+would use is one (git-annex leaves a file whose content was never fetched as a
+link to a missing object), the subject fails with an error naming the file and
+suggesting `datalad get <path>`, before MRIQC runs, and no `nidm.ttl` is
+written for it; the app exits 1. The lookup does not skip a broken file to use
+a later one: a broken session file fails the subject even when `sub-{id}/` or
+the dataset-level `nidm.ttl` holds a readable file, since the job would
+otherwise write IQMs into a less specific document than the subject's own. A
+broken file the lookup would not reach is not an error, for example a broken
+dataset-level `nidm.ttl` when the subject has a readable file of its own. A
+missing NIDM directory, or one with no file for the subject, still gives a
+standalone `nidm.ttl` as above. With `--skip-nidm-conversion` the input NIDM is
+not read and a broken link does not fail the job.
 
 #### How IQM records are written
 

@@ -400,28 +400,169 @@ def test_subject_missing_from_the_nidm_input_is_a_warning(
     assert "has no sub-51209 directory" in missing
 
 
-def test_unfetched_annex_dataset_level_nidm_is_named(
+def _absent_annex_object(tmp_path):
+    return tmp_path / "annex" / "objects" / "absent"
+
+
+def _assert_fails_on_unfetched(ok, link, tmp_path, caplog):
+    """The job failed on the unfetched input file, before any conversion,
+    and wrote no standalone nidm.ttl."""
+    assert ok is False
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    [error] = [m for m in errors if "broken symbolic link" in m]
+    assert str(link) in error
+    assert f"datalad get {link}" in error
+    assert not any("stopped where the conversion starts" in m for m in errors)
+    assert _input_nidm_warnings(caplog) == []
+    assert list((tmp_path / "out").rglob("nidm.ttl")) == []
+
+
+def _assert_reached_conversion(caplog):
+    """The job got past the input lookup (the stub stops it at the conversion)
+    with no broken-link error."""
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("stopped where the conversion starts" in m for m in messages)
+    assert not any("broken symbolic link" in m for m in messages)
+
+
+def test_unfetched_dataset_level_nidm_fails_when_it_is_the_input(
     tmp_path, logger, caplog, monkeypatch
 ):
     """The lookup's last fallback, <nidm dir>/nidm.ttl, as an unfetched
-    git-annex file is named rather than reported as a missing subject"""
+    git-annex file, with nothing for the subject before it: the job fails"""
     nidm_dir = tmp_path / "nidm"
     nidm_dir.mkdir()
     link = nidm_dir / "nidm.ttl"
-    link.symlink_to(tmp_path / "annex" / "objects" / "absent")
+    link.symlink_to(_absent_annex_object(tmp_path))
+    with caplog.at_level(logging.DEBUG):
+        ok = _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir)
+
+    _assert_fails_on_unfetched(ok, link, tmp_path, caplog)
+
+
+def test_unfetched_dataset_level_nidm_is_ignored_when_the_subject_has_a_file(
+    tmp_path, logger, caplog, monkeypatch
+):
+    """A broken dataset-level nidm.ttl the lookup does not reach, because the
+    subject's own file comes first, does not fail the subject"""
+    nidm_dir = tmp_path / "nidm"
+    _write(nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl", "")
+    (nidm_dir / "nidm.ttl").symlink_to(_absent_annex_object(tmp_path))
     with caplog.at_level(logging.DEBUG):
         _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir)
 
-    [missing] = _input_nidm_warnings(caplog)
-    assert f"{link} is a broken symbolic link" in missing
-    assert "has no sub-51209 directory" not in missing
+    _assert_reached_conversion(caplog)
+    assert _input_nidm_warnings(caplog) == []
 
 
-def test_every_file_the_lookup_tries_is_named_when_unfetched(
+def test_unfetched_session_file_fails_rather_than_falling_back(
     tmp_path, logger, caplog, monkeypatch
 ):
-    """The warning and detect_existing_nidm share one candidate list: an
-    unfetched file at each place the lookup tries is named"""
+    """The subject's own session file is unfetched while sub-<id>/ and the
+    dataset-level nidm.ttl are readable: the job fails instead of using the
+    less specific file"""
+    nidm_dir = tmp_path / "nidm"
+    link = nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(_absent_annex_object(tmp_path))
+    _write(nidm_dir / "sub-51209" / "ses-1" / "sub-51209_ses-1.ttl", "")
+    _write(nidm_dir / "sub-51209" / "nidm.ttl", "")
+    _write(nidm_dir / "nidm.ttl", "")
+    with caplog.at_level(logging.DEBUG):
+        ok = _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir)
+
+    _assert_fails_on_unfetched(ok, link, tmp_path, caplog)
+
+
+def test_unfetched_subject_level_file_fails(tmp_path, logger, caplog, monkeypatch):
+    """sub-<id>/nidm.ttl unfetched, with a readable dataset-level file and
+    another readable file in sub-<id>/: the job fails"""
+    nidm_dir = tmp_path / "nidm"
+    link = nidm_dir / "sub-51209" / "nidm.ttl"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(_absent_annex_object(tmp_path))
+    _write(nidm_dir / "sub-51209" / "a.ttl", "")
+    _write(nidm_dir / "nidm.ttl", "")
+    with caplog.at_level(logging.DEBUG):
+        ok = _up_to_conversion(
+            tmp_path, logger, monkeypatch, nidm_dir, session_id=None
+        )
+
+    _assert_fails_on_unfetched(ok, link, tmp_path, caplog)
+
+
+def test_unfetched_file_found_by_the_subject_search_fails(
+    tmp_path, logger, caplog, monkeypatch
+):
+    """The first sub-<id>/*.ttl the lookup would take is unfetched: the job
+    fails rather than taking the next one"""
+    nidm_dir = tmp_path / "nidm"
+    link = nidm_dir / "sub-51209" / "a.ttl"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(_absent_annex_object(tmp_path))
+    _write(nidm_dir / "sub-51209" / "b.ttl", "")
+    with caplog.at_level(logging.DEBUG):
+        ok = _up_to_conversion(
+            tmp_path, logger, monkeypatch, nidm_dir, session_id=None
+        )
+
+    _assert_fails_on_unfetched(ok, link, tmp_path, caplog)
+
+
+def test_relative_broken_link_fails(tmp_path, logger, caplog, monkeypatch):
+    """git-annex writes relative links (../../.git/annex/objects/...)"""
+    nidm_dir = tmp_path / "nidm"
+    link = nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(Path("..") / ".." / ".git" / "annex" / "objects" / "absent")
+    with caplog.at_level(logging.DEBUG):
+        ok = _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir)
+
+    _assert_fails_on_unfetched(ok, link, tmp_path, caplog)
+
+
+def test_relative_link_with_fetched_content_is_used(
+    tmp_path, logger, caplog, monkeypatch
+):
+    """The same relative link once `datalad get` has fetched its content"""
+    nidm_dir = tmp_path / "nidm"
+    _write(nidm_dir / ".git" / "annex" / "objects" / "present", "")
+    link = nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(Path("..") / ".." / ".git" / "annex" / "objects" / "present")
+    with caplog.at_level(logging.DEBUG):
+        _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir)
+
+    _assert_reached_conversion(caplog)
+    assert any(
+        f"Found existing NIDM (session): {link}" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_skipped_conversion_does_not_fail_on_an_unfetched_input(
+    tmp_path, logger, caplog, monkeypatch
+):
+    """--skip-nidm-conversion does not read the input NIDM, so an unfetched
+    one does not fail the job"""
+    nidm_dir = tmp_path / "nidm"
+    link = nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(_absent_annex_object(tmp_path))
+    with caplog.at_level(logging.DEBUG):
+        ok = _up_to_conversion(
+            tmp_path, logger, monkeypatch, nidm_dir, skip_nidm=True
+        )
+
+    assert ok is True
+    assert not any("broken symbolic link" in r.getMessage() for r in caplog.records)
+
+
+def test_every_file_the_lookup_tries_fails_when_unfetched(
+    tmp_path, logger, caplog, monkeypatch
+):
+    """Each session file and the dataset-level file, when it is the first one
+    present and unfetched, fails the job"""
     from src.nidm_converter.nidm_converter import (
         dataset_nidm_path,
         session_nidm_candidates,
@@ -435,12 +576,11 @@ def test_every_file_the_lookup_tries_is_named_when_unfetched(
         caplog.clear()
         shutil.rmtree(tmp_path, ignore_errors=True)
         link.parent.mkdir(parents=True)
-        link.symlink_to(tmp_path / "annex" / "objects" / "absent")
+        link.symlink_to(_absent_annex_object(tmp_path))
         with caplog.at_level(logging.DEBUG):
-            _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir)
+            ok = _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir)
 
-        [missing] = _input_nidm_warnings(caplog)
-        assert f"{link} is a broken symbolic link" in missing
+        _assert_fails_on_unfetched(ok, link, tmp_path, caplog)
 
 
 def test_link_to_a_directory_is_not_called_broken(
@@ -458,6 +598,25 @@ def test_link_to_a_directory_is_not_called_broken(
 
     [missing] = _input_nidm_warnings(caplog)
     assert "broken symbolic link" not in missing
+    assert not any(r.levelno >= logging.ERROR and "broken" in r.getMessage()
+                   for r in caplog.records)
+
+
+def test_dataset_level_link_to_a_directory_does_not_fail(
+    tmp_path, logger, caplog, monkeypatch
+):
+    """A dataset-level nidm.ttl that links to a directory is skipped too: the
+    output is standalone, with the #45 warning"""
+    nidm_dir = tmp_path / "nidm"
+    nidm_dir.mkdir()
+    (tmp_path / "a_directory").mkdir()
+    (nidm_dir / "nidm.ttl").symlink_to(tmp_path / "a_directory")
+    with caplog.at_level(logging.DEBUG):
+        _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir)
+
+    _assert_reached_conversion(caplog)
+    [missing] = _input_nidm_warnings(caplog)
+    assert "has no sub-51209 directory" in missing
 
 
 def test_unfetched_file_the_lookup_does_not_read_is_not_blamed(
@@ -522,19 +681,17 @@ def test_subject_level_run_on_per_session_nidm_points_to_session_label(
     assert "--session-label" in missing
 
 
-def test_unfetched_annex_session_file_is_named(tmp_path, logger, caplog, monkeypatch):
+def test_unfetched_annex_session_file_fails(tmp_path, logger, caplog, monkeypatch):
     """A session file that is a broken symbolic link (git-annex content never
-    fetched) is named in the warning rather than reported as missing"""
+    fetched) fails the job and names the file"""
     nidm_dir = tmp_path / "nidm"
     link = nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl"
     link.parent.mkdir(parents=True)
-    link.symlink_to(tmp_path / "annex" / "objects" / "absent")
+    link.symlink_to(_absent_annex_object(tmp_path))
     with caplog.at_level(logging.DEBUG):
-        _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir)
+        ok = _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir)
 
-    [missing] = _input_nidm_warnings(caplog)
-    assert f"{link} is a broken symbolic link" in missing
-    assert "datalad get" in missing
+    _assert_fails_on_unfetched(ok, link, tmp_path, caplog)
 
 
 def test_default_nidm_location_that_is_a_file_is_a_warning(

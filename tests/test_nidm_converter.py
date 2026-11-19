@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from src.nidm_converter.nidm_converter import (
+    NIDMInputNotRetrieved,
     copy_and_prepare_nidm,
     detect_existing_nidm,
     get_supported_nidm_formats,
@@ -360,3 +361,80 @@ def test_detect_existing_nidm_ignores_a_temporary_before_the_dataset_file(tmp_pa
     wanted = _touch(tmp_path / "nidm.ttl")
     assert detect_existing_nidm(
         subject_id="01", nidm_input_dir=tmp_path, logger=logger) == wanted
+
+
+# An unfetched git-annex file is a symbolic link to a missing object. The
+# first candidate present decides, and a broken link counts as present.
+def _broken(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.symlink_to(path.parent / ".missing-annex-object")
+    return path
+
+
+@pytest.mark.parametrize("relative", [
+    "sub-01/ses-a/nidm.ttl",
+    "sub-01/ses-a/sub-01_ses-a.ttl",
+    "sub-01/nidm.ttl",
+    "sub-01/other.ttl",
+    "nidm.ttl",
+])
+def test_detect_existing_nidm_raises_on_the_broken_file_it_would_use(
+    tmp_path, logger, relative
+):
+    link = _broken(tmp_path / relative)
+    with pytest.raises(NIDMInputNotRetrieved) as raised:
+        detect_existing_nidm(
+            subject_id="01", nidm_input_dir=tmp_path, session_id="a",
+            logger=logger,
+        )
+    assert raised.value.path == link
+    assert f"datalad get {link}" in str(raised.value)
+
+
+def test_detect_existing_nidm_broken_session_file_does_not_fall_through(
+    tmp_path, logger
+):
+    link = _broken(tmp_path / "sub-01" / "ses-a" / "nidm.ttl")
+    _touch(tmp_path / "sub-01" / "nidm.ttl")
+    _touch(tmp_path / "nidm.ttl")
+    with pytest.raises(NIDMInputNotRetrieved) as raised:
+        detect_existing_nidm(
+            subject_id="01", nidm_input_dir=tmp_path, session_id="a",
+            logger=logger,
+        )
+    assert raised.value.path == link
+
+
+def test_detect_existing_nidm_ignores_a_broken_file_it_would_not_reach(
+    tmp_path, logger
+):
+    _broken(tmp_path / "nidm.ttl")
+    _broken(tmp_path / "sub-01" / "z.ttl")
+    _broken(tmp_path / "sub-01" / "ses-b" / "nidm.ttl")
+    wanted = _touch(tmp_path / "sub-01" / "ses-a" / "nidm.ttl")
+    assert detect_existing_nidm(
+        subject_id="01", nidm_input_dir=tmp_path, session_id="a", logger=logger
+    ) == wanted
+
+    other = _touch(tmp_path / "sub-01" / "a.ttl")
+    assert detect_existing_nidm(
+        subject_id="01", nidm_input_dir=tmp_path, logger=logger
+    ) == other
+
+
+def test_detect_existing_nidm_link_loop_counts_as_broken(tmp_path, logger):
+    link = tmp_path / "nidm.ttl"
+    link.symlink_to(link)
+    with pytest.raises(NIDMInputNotRetrieved):
+        detect_existing_nidm(subject_id="01", nidm_input_dir=tmp_path, logger=logger)
+
+
+def test_detect_existing_nidm_skips_a_session_link_to_a_directory(tmp_path, logger):
+    (tmp_path / "elsewhere").mkdir()
+    link = tmp_path / "sub-01" / "ses-a" / "nidm.ttl"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(tmp_path / "elsewhere")
+    wanted = _touch(tmp_path / "nidm.ttl")
+    assert detect_existing_nidm(
+        subject_id="01", nidm_input_dir=tmp_path, session_id="a", logger=logger
+    ) == wanted
