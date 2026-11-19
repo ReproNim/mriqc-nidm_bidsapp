@@ -655,7 +655,7 @@ MRIQC Arguments:
     --omp-nthreads Maximum number of threads per process
     --no-sub       Disable anonymized metrics submission (default behavior)
     --ica          Run ICA denoising
-    --fd-radius    Framewise displacement radius (default: 50mm)
+    --fd_thres     Framewise displacement threshold (MRIQC spells it with an underscore)
 
   For full MRIQC options, see: https://mriqc.readthedocs.io/
 """,

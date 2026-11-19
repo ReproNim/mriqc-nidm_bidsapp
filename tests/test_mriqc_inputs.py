@@ -369,6 +369,14 @@ class TestMain:
     def _option(cmd, flag):
         return cmd[cmd.index(flag) + 1]
 
+    def test_passthrough_spelling_survives_the_gate(self, ucla, tmp_path):
+        # --fd_thres is MRIQC's own spelling; the gate copies the arguments.
+        bids, *_ = ucla
+        code, [cmd] = self._run(bids, tmp_path / "out", "--fd_thres", "0.3")
+        assert code == 0
+        assert self._option(cmd, "--fd_thres") == "0.3"
+        assert "--fd-thres" not in cmd
+
     def test_mriqc_gets_a_filter_without_the_slab(self, ucla, tmp_path):
         bids, fine, slab = ucla
         code, calls = self._run(bids, tmp_path / "out")

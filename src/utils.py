@@ -80,6 +80,23 @@ def normalize_session_labels(labels: List[str]) -> List[str]:
     return [normalize_label(label, 'ses-') for label in labels]
 
 
+class PassThroughKey(str):
+    """An underscored option name that remembers the flag the user typed.
+
+    It compares and hashes as the plain name (``fd_thres``), so lookups by
+    name keep working, while ``flag`` is what goes back on MRIQC's command
+    line: MRIQC spells some options with underscores (``--fd_thres``) and most
+    with dashes, and only the user knows which.
+    """
+
+    flag: str
+
+    def __new__(cls, name: str, flag: str):
+        obj = super().__new__(cls, name)
+        obj.flag = flag
+        return obj
+
+
 def parse_mriqc_args(extra_args: List[str]) -> Dict[str, Any]:
     """
     Parse MRIQC extra arguments into kwargs dictionary.
@@ -121,8 +138,9 @@ def parse_mriqc_args(extra_args: List[str]) -> Dict[str, Any]:
         if not arg.startswith("--"):
             i += 1
             continue
-        key, eq, inline = arg[2:].partition("=")
-        key = key.replace("-", "_")  # --omp-nthreads → omp_nthreads
+        typed, eq, inline = arg[2:].partition("=")
+        # --omp-nthreads → omp_nthreads, remembering "--omp-nthreads".
+        key = PassThroughKey(typed.replace("-", "_"), f"--{typed}")
         if eq:
             # --bids-filter-file=/x/f.json: the value is part of the flag.
             mriqc_kwargs[key] = _number(inline)
@@ -251,6 +269,7 @@ __all__ = [
     "normalize_label",
     "normalize_participant_labels",
     "normalize_session_labels",
+    "PassThroughKey",
     "parse_mriqc_args",
     "setup_logging",
     "create_dataset_description",
