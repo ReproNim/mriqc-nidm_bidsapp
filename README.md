@@ -111,7 +111,8 @@ error (status 2). It is not read as the current directory; name that as `.`.
 - `--session-label`: Session label(s) to process (without 'ses-' prefix)
 - `--skip-mriqc`: Skip MRIQC execution, use existing output
 - `--mriqc-output-dir`: Use existing MRIQC output directory
-- `--skip-nidm-conversion`: Run MRIQC only, skip NIDM conversion
+- `--skip-nidm-conversion`: Run MRIQC only, skip NIDM conversion. Required
+  to name `dwi` in MRIQC's `-m`/`--modalities`; see [Diffusion (dwi) images](#diffusion-dwi-images)
 - `--max-voxel-size`: Leave out T1w/T2w images with any voxel dimension
   above this, in mm (off by default); see [Anatomical images MRIQC cannot rate](#anatomical-images-mriqc-cannot-rate)
 - `-v, --verbose`: Enable verbose output
@@ -289,6 +290,30 @@ This catches MRIQC failures, not every missing IQM:
   check, and the app converts the IQM JSONs it finds.
 - A re-run into an existing output directory also reads IQM JSONs left by an
   earlier run.
+
+#### Diffusion (dwi) images
+
+dwi IQMs are not converted to NIDM yet. The MRIQC IQM data dictionary the
+conversion uses has no dwi metrics, and csv2nidm, given a column the
+dictionary does not describe, asks for an annotation on standard input, which
+fails in a batch job without writing `nidm.ttl`. So:
+
+- Naming `dwi` in MRIQC's `-m`/`--modalities` in a run that converts to NIDM
+  is a usage error (status 2), before MRIQC starts. Drop `dwi`
+  (`-m T1w T2w bold`), or add `--skip-nidm-conversion` to rate dwi without
+  NIDM conversion.
+- Without `-m`, MRIQC rates every modality, dwi included, and writes its dwi
+  IQMs and reports under `mriqc/` as usual. The NIDM conversion leaves the dwi
+  IQM JSONs out, logs one warning that lists them, and converts the others.
+  A failure in MRIQC's dwi workflow still fails the subject, like any other
+  MRIQC failure; pass `-m T1w T2w bold` to avoid running it.
+- dwi IQM JSONs found in `--mriqc-output-dir`, or left by an earlier run, are
+  left out the same way.
+- A subject whose only IQM JSONs are dwi gets no `nidm.ttl`, and the job
+  fails.
+
+An IQM JSON counts as dwi when it is in a `dwi/` directory or its BIDS suffix
+is `dwi` (`sub-01_ses-1_run-1_dwi.json`).
 
 **Running under BABS:** pair this layout with `zip_foldernames: {${subid}: "<version>"}`
 so the zip's top-level folder is `sub-{id}` and results unzip straight into

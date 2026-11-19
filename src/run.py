@@ -29,7 +29,7 @@ from typing import List, Optional
 
 from . import __version__
 from .mriqc.inputs import gate_anat_inputs
-from .mriqc.mriqc_runner import MRIQCWrapper, is_iqm_json
+from .mriqc.mriqc_runner import MRIQCWrapper, is_dwi_iqm_json, is_iqm_json
 from .utils import (
     normalize_label,
     parse_mriqc_args,
@@ -257,6 +257,45 @@ def _nidm_input_dir(value: str) -> Path:
 # MRIQC 25's --modalities choices, and its default when none is given.
 MRIQC_MODALITIES = ("T1w", "T2w", "bold", "dwi")
 
+# Why dwi IQMs are not converted to NIDM. A column csv2nidm finds no row for
+# in the data dictionary makes it ask for an annotation on standard input,
+# which fails in a batch job, and no nidm.ttl is written.
+DWI_NOT_CONVERTED = (
+    "dwi IQMs cannot be converted to NIDM yet (the MRIQC IQM data dictionary "
+    "has no dwi metrics)"
+)
+
+
+def _explicit_dwi_request(mriqc_extra_args: List[str]) -> bool:
+    """True if the MRIQC options name dwi in -m/--modalities.
+
+    A bare -m, or none, is not an explicit request: MRIQC then runs every
+    modality, and the dwi IQMs are left out of the NIDM conversion instead.
+    """
+    requested = parse_mriqc_args(mriqc_extra_args).get("modalities")
+    if requested is True or not requested:
+        return False
+    if not isinstance(requested, list):
+        requested = [requested]
+    return "dwi" in requested
+
+
+def _without_dwi_iqms(
+    json_files: List[Path], logger: logging.Logger
+) -> List[Path]:
+    """The IQM JSONs that are not dwi; the dwi ones are logged in one warning.
+
+    They come from MRIQC run without -m, which rates dwi too, or from a
+    --mriqc-output-dir that holds them.
+    """
+    dwi = [f for f in json_files if is_dwi_iqm_json(f)]
+    if dwi:
+        logger.warning(
+            f"Not converting {len(dwi)} dwi IQM JSON file(s) to NIDM, "
+            f"{DWI_NOT_CONVERTED}: " + ", ".join(f.name for f in dwi)
+        )
+    return [f for f in json_files if not is_dwi_iqm_json(f)]
+
 
 def _gate_mriqc_inputs(
     subject_id: str,
@@ -472,6 +511,15 @@ def process_subject(
             logger.info("Skipping NIDM conversion (--skip-nidm-conversion flag)")
             return True
 
+        # dwi IQMs never reach csv2nidm (see DWI_NOT_CONVERTED).
+        json_files = _without_dwi_iqms(json_files, logger)
+        if not json_files:
+            logger.error(
+                f"No NIDM written for sub-{subject_id}: its only MRIQC JSON "
+                f"files are dwi, and {DWI_NOT_CONVERTED}"
+            )
+            return False
+
         # Step 3: Process each MRIQC JSON file.
         # The session is decided by the caller (--session-label), not sniffed from
         # filenames -- it determines the output directory, so it has to be known
@@ -656,6 +704,9 @@ MRIQC Arguments:
     --no-sub       Disable anonymized metrics submission (default behavior)
     --ica          Run ICA denoising
     --fd-radius    Framewise displacement radius (default: 50mm)
+    -m/--modalities  Modalities to rate (T1w T2w bold dwi; default: all).
+                   dwi needs --skip-nidm-conversion: dwi IQMs cannot be
+                   converted to NIDM yet.
 
   For full MRIQC options, see: https://mriqc.readthedocs.io/
 """,
@@ -717,7 +768,12 @@ MRIQC Arguments:
     parser.add_argument(
         "--skip-nidm-conversion",
         action="store_true",
-        help="Run MRIQC only, skip NIDM conversion",
+        help=(
+            "Run MRIQC only, skip NIDM conversion. Required to name dwi in "
+            "MRIQC's -m/--modalities: dwi IQMs cannot be converted to NIDM "
+            "yet. Without -m, MRIQC rates dwi and the NIDM conversion leaves "
+            "its IQMs out with a warning"
+        ),
     )
     parser.add_argument(
         "--max-voxel-size",
@@ -762,6 +818,20 @@ MRIQC Arguments:
             args.nidm_input_dir = _nidm_input_dir(args.nidm_input_dir)
         except argparse.ArgumentTypeError as e:
             parser.error(f"argument --nidm-input-dir: {e}")
+    # Asking MRIQC for dwi in a run that converts to NIDM would rate the dwi
+    # images and then leave every one of their IQMs out of nidm.ttl. -m is
+    # only used when the app runs MRIQC.
+    runs_mriqc = not (args.skip_mriqc or args.mriqc_output_dir)
+    if (
+        runs_mriqc
+        and not args.skip_nidm_conversion
+        and _explicit_dwi_request(mriqc_extra_args)
+    ):
+        parser.error(
+            f"argument -m/--modalities: {DWI_NOT_CONVERTED}. Drop dwi from "
+            "--modalities, or pass --skip-nidm-conversion to run MRIQC on dwi "
+            "without NIDM conversion"
+        )
 
     # Validate the input before creating anything or starting MRIQC.
     #
