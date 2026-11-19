@@ -87,6 +87,8 @@ class TestIsDwiIqmJson:
         "sub-01/dwi/sub-01_dwi.json",
         "sub-01/ses-1/dwi/sub-01_ses-1_run-1_dwi.json",
         "sub-01/ses-1/dwi/sub-01_ses-1_acq-b1000_dir-AP_run-2_dwi.json",
+        # In the dwi datatype directory, whatever the suffix.
+        "sub-01/ses-1/dwi/sub-01_ses-1_run-1_sbref.json",
         # Out of its datatype directory, the suffix still marks it.
         "flat/sub-01_ses-1_run-1_dwi.json",
     ])
