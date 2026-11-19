@@ -127,6 +127,8 @@ class TestOwnedOptions:
         (["--participant-label", "2"], "--participant-label"),
         (["--participant_label=2"], "--participant_label"),
         (["--participant_lab", "2"], "--participant_lab"),
+        (["--ica", "--session-id", "2"], "--session-id"),
+        (["--session_id=2"], "--session_id"),
     ])
     def test_finds_the_owned_flag(self, typed, flag):
         assert owned_mriqc_option(typed)[0] == flag

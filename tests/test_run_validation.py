@@ -590,13 +590,19 @@ class TestPassThroughOwnedOptions:
 
     --participant_label would land after the app's own --participant-label and
     MRIQC keeps the last value, so MRIQC would process one subject while the
-    app writes NIDM for another.
+    app writes NIDM for another. --session-id would collide with the session
+    the app passes itself (process_participant() got multiple values for
+    keyword argument 'session_id').
     """
 
     @pytest.mark.parametrize("extra, pointer", [
         (("--participant_label", "02"), "--participant-label"),
         (("--participant_label=02",), "--participant-label"),
         (("--participant_lab", "02"), "--participant-label"),
+        (("--session-id", "2"), "--session-label"),
+        (("--session_id", "2"), "--session-label"),
+        (("--session-id=2",), "--session-label"),
+        (("--session_i", "2"), "--session-label"),
     ])
     def test_rejected_with_a_usage_error(
         self, tmp_path, monkeypatch, capsys, extra, pointer
@@ -613,6 +619,19 @@ class TestPassThroughOwnedOptions:
         mock_wrapper.assert_not_called()
         mock_process.assert_not_called()
         assert not out_dir.exists()
+
+    def test_session_label_is_still_the_way_to_pick_a_session(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        exit_code, mock_wrapper, _ = _run_main(
+            monkeypatch, bids_dir, tmp_path / "out",
+            "--participant-label", "01", "--session-label", "2",
+            "--skip-nidm-conversion",
+        )
+        assert exit_code == 0, capsys.readouterr().err
+        kwargs = mock_wrapper.return_value.process_participant.call_args.kwargs
+        assert kwargs["session_id"] == "2"
 
     def test_other_options_still_pass_through(self, tmp_path, monkeypatch, capsys):
         bids_dir = _write_bids_tree(tmp_path / "bids")

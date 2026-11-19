@@ -103,6 +103,7 @@ class PassThroughKey(str):
 # underscores, is a prefix (at least four characters) of the owned name.
 _OWNED_MRIQC_OPTIONS = {
     "participant_label": "--participant-label",
+    "session_id": "--session-label",
 }
 _MIN_ABBREVIATION = 4
 
