@@ -438,3 +438,70 @@ def test_detect_existing_nidm_skips_a_session_link_to_a_directory(tmp_path, logg
     assert detect_existing_nidm(
         subject_id="01", nidm_input_dir=tmp_path, session_id="a", logger=logger
     ) == wanted
+
+
+def test_detect_existing_nidm_broken_session_file_beats_the_equally_specific_one(
+    tmp_path, logger
+):
+    """The lookup does not skip a file it would use because its content is
+    missing, also when the next candidate is as specific: it may be a
+    different record"""
+    link = _broken(tmp_path / "sub-01" / "ses-a" / "nidm.ttl")
+    _touch(tmp_path / "sub-01" / "ses-a" / "sub-01_ses-a.ttl")
+    with pytest.raises(NIDMInputNotRetrieved) as raised:
+        detect_existing_nidm(
+            subject_id="01", nidm_input_dir=tmp_path, session_id="a",
+            logger=logger,
+        )
+    assert raised.value.path == link
+
+
+def test_broken_link_message_names_the_target_and_both_causes(tmp_path, logger):
+    link = tmp_path / "sub-01" / "nidm.ttl"
+    link.parent.mkdir(parents=True)
+    target = "../../.git/annex/objects/Xk/Pq/MD5E-s1--abc.ttl/MD5E-s1--abc.ttl"
+    link.symlink_to(target)
+    with pytest.raises(NIDMInputNotRetrieved) as raised:
+        detect_existing_nidm(subject_id="01", nidm_input_dir=tmp_path, logger=logger)
+    message = str(raised.value)
+    assert raised.value.target == target
+    assert f"broken symbolic link to {target}" in message
+    assert f"datalad get {link}" in message
+    assert "bind the dataset root" in message
+
+
+ANNEX_POINTER = "/annex/objects/MD5E-s1234--0123456789abcdef.ttl\n"
+
+
+@pytest.mark.parametrize("relative", [
+    "sub-01/ses-a/nidm.ttl",
+    "sub-01/ses-a/sub-01_ses-a.ttl",
+    "sub-01/nidm.ttl",
+    "sub-01/other.ttl",
+    "nidm.ttl",
+])
+def test_detect_existing_nidm_raises_on_an_unlocked_pointer_file(
+    tmp_path, logger, relative
+):
+    pointer = tmp_path / relative
+    pointer.parent.mkdir(parents=True, exist_ok=True)
+    pointer.write_text(ANNEX_POINTER)
+    with pytest.raises(NIDMInputNotRetrieved) as raised:
+        detect_existing_nidm(
+            subject_id="01", nidm_input_dir=tmp_path, session_id="a",
+            logger=logger,
+        )
+    assert raised.value.path == pointer
+    assert raised.value.target is None
+    assert "unlocked git-annex pointer file" in str(raised.value)
+    assert f"datalad get {pointer}" in str(raised.value)
+
+
+def test_detect_existing_nidm_ignores_a_pointer_file_it_would_not_reach(
+    tmp_path, logger
+):
+    (tmp_path / "nidm.ttl").write_text(ANNEX_POINTER)
+    wanted = _touch(tmp_path / "sub-01" / "nidm.ttl")
+    assert detect_existing_nidm(
+        subject_id="01", nidm_input_dir=tmp_path, logger=logger
+    ) == wanted

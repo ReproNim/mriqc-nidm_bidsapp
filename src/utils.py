@@ -18,6 +18,16 @@ from typing import Any, Dict, List
 BIDS_VERSION = "1.8.0"
 
 
+def not_fetched(path: Path) -> bool:
+    """A git-annex file whose content is not here: a broken symlink (locked)
+    or a small pointer file naming the annex object (unlocked)."""
+    if not path.exists():
+        return True
+    if path.stat().st_size > 1024:
+        return False
+    return path.read_bytes().startswith(b"/annex/objects/")
+
+
 def normalize_label(label: str, prefix: str) -> str:
     """
     Normalize a BIDS label by stripping prefix if present.

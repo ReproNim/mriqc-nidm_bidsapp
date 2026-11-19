@@ -16,9 +16,12 @@ Author: Adapted from freesurfer_bidsapp for mriqc-nidm_bidsapp
 """
 
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import List, Optional
+
+from ..utils import not_fetched
 
 
 # Module-level constant for supported NIDM file extensions
@@ -31,26 +34,54 @@ TEMPORARY_PREFIX = ".nidm."
 
 
 class NIDMInputNotRetrieved(FileNotFoundError):
-    """The file the NIDM lookup would use is a broken symbolic link.
+    """The file the NIDM lookup would use has no content here.
 
     git-annex leaves a file whose content was never fetched as a symbolic
-    link to a missing object. The subject has an input NIDM, it is just not
-    available, so the job fails instead of writing a standalone nidm.ttl
-    that is not linked to the subject's other NIDM records.
+    link to a missing object (locked) or as a small pointer file naming the
+    object (unlocked). A link also breaks when its target is outside what
+    this process can see, e.g. a container that mounts only the NIDM
+    directory of a dataset whose .git/annex lies above it. Either way the
+    subject has an input NIDM that is not available, so the job fails
+    instead of writing a standalone nidm.ttl that is not linked to the
+    subject's other NIDM records.
     """
 
     def __init__(self, path: Path):
         self.path = path
-        super().__init__(
-            f"Input NIDM {path} is a broken symbolic link (a git-annex file "
-            f"whose content was never fetched); run `datalad get {path}` "
-            "and run the job again"
-        )
+        self.target = os.readlink(path) if path.is_symlink() else None
+        if self.target is not None:
+            message = (
+                f"Input NIDM {path} is a broken symbolic link to {self.target}. "
+                "Either its git-annex content was never fetched (run "
+                f"`datalad get {path}`), or its target is outside what this "
+                "process can see (in a container, bind the dataset root, not "
+                "only its NIDM directory)"
+            )
+        else:
+            message = (
+                f"Input NIDM {path} is an unlocked git-annex pointer file whose "
+                f"content was never fetched; run `datalad get {path}`"
+            )
+        super().__init__(message)
 
 
 def _is_broken_link(path: Path) -> bool:
     """A symbolic link whose target does not exist (or loops)."""
     return path.is_symlink() and not path.exists()
+
+
+def _present(path: Path) -> bool:
+    """A file the lookup takes: a regular file, or a broken symbolic link
+    (whose content may simply not be fetched yet)."""
+    return path.is_file() or _is_broken_link(path)
+
+
+def _ensure_retrieved(path: Path) -> Path:
+    """path, or NIDMInputNotRetrieved when it is a git-annex file whose
+    content is not here (a broken link, or an unlocked pointer file)."""
+    if _is_broken_link(path) or (path.is_file() and not_fetched(path)):
+        raise NIDMInputNotRetrieved(path)
+    return path
 
 
 def _search_nidm_in_directory(
@@ -73,8 +104,8 @@ def _search_nidm_in_directory(
         Path to NIDM file, or None if not found
 
     Raises:
-        NIDMInputNotRetrieved: the file this search would return is a broken
-            symbolic link
+        NIDMInputNotRetrieved: the file this search would return is a
+            git-annex file whose content is not here
     """
     if logger is None:
         logger = logging.getLogger(__name__)
@@ -87,11 +118,10 @@ def _search_nidm_in_directory(
 
     # Prefer nidm.ttl first (convention)
     preferred = search_dir / "nidm.ttl"
-    if preferred.exists():
+    if preferred.exists() or _is_broken_link(preferred):
+        _ensure_retrieved(preferred)
         logger.info(f"Found existing NIDM (preferred): {preferred}")
         return preferred
-    if _is_broken_link(preferred):
-        raise NIDMInputNotRetrieved(preferred)
 
     # Search for other NIDM formats in order of preference
     # Sort results for deterministic behavior across filesystems
@@ -101,8 +131,7 @@ def _search_nidm_in_directory(
             if not f.name.startswith(TEMPORARY_PREFIX)
         )
         if files:
-            if _is_broken_link(files[0]):
-                raise NIDMInputNotRetrieved(files[0])
+            _ensure_retrieved(files[0])
             logger.info(f"Found existing NIDM ({ext.lstrip('.')}): {files[0]}")
             return files[0]
 
@@ -152,15 +181,21 @@ def detect_existing_nidm(
     session with nothing directly under sub-{id}/, so a session-level run
     must look in ses-{session}/ first.
 
-    The first candidate present decides, and a broken symbolic link (a
-    git-annex file whose content was never fetched) counts as present: the
-    lookup raises NIDMInputNotRetrieved instead of falling through to a later
-    candidate. So a broken session file fails the job even when sub-{id}/ or
-    the dataset-level nidm.ttl holds a readable file, because that subject's
-    own NIDM is what the job would have used. A broken file the lookup would
-    not reach (e.g. a broken dataset-level nidm.ttl when the subject's file
-    is readable) is not an error. A candidate that is a directory, or a link
-    to one, is skipped as before.
+    The first candidate present decides. A git-annex file whose content is
+    not here (a broken symbolic link, or an unlocked pointer file) counts as
+    present, and the lookup raises NIDMInputNotRetrieved for it instead of
+    falling through to a later candidate: it does not skip a file it would
+    use because that file's content is missing, since a readable later
+    candidate may be a different record. That holds for files of equal
+    specificity too (a broken ses-{session}/nidm.ttl fails the job even when
+    ses-{session}/sub-{id}_ses-{session}.ttl is readable) as well as for the
+    less specific sub-{id}/ files and the dataset-level nidm.ttl. A file the
+    lookup would not reach (e.g. a broken dataset-level nidm.ttl when the
+    subject's file is readable) is not an error.
+
+    At the session and dataset-level steps a candidate that is a directory,
+    or a link to one, is skipped. The sub-{id}/ search (step 3 and 4) does
+    not check for directories and can return one.
 
     Args:
         subject_id: Subject identifier (without "sub-" prefix)
@@ -174,8 +209,8 @@ def detect_existing_nidm(
 
     Raises:
         ValueError: If neither nidm_input_dir nor bids_dir is provided
-        NIDMInputNotRetrieved: the file the lookup would use is a broken
-            symbolic link
+        NIDMInputNotRetrieved: the file the lookup would use is a git-annex
+            file whose content is not here (broken link or pointer file)
 
     Examples:
         >>> # Explicit NIDM input directory (recommended)
@@ -210,22 +245,20 @@ def detect_existing_nidm(
     subject_dir = nidm_root / f"sub-{subject_id}"
 
     for candidate in session_nidm_candidates(nidm_root, subject_id, session_id):
-        if candidate.is_file():
+        if _present(candidate):
+            _ensure_retrieved(candidate)
             logger.info(f"Found existing NIDM (session): {candidate}")
             return candidate
-        if _is_broken_link(candidate):
-            raise NIDMInputNotRetrieved(candidate)
 
     found = _search_nidm_in_directory(subject_dir, logger)
     if found is not None:
         return found
 
     dataset_level = dataset_nidm_path(nidm_root)
-    if dataset_level.is_file():
+    if _present(dataset_level):
+        _ensure_retrieved(dataset_level)
         logger.info(f"Found existing NIDM (dataset-level): {dataset_level}")
         return dataset_level
-    if _is_broken_link(dataset_level):
-        raise NIDMInputNotRetrieved(dataset_level)
 
     return None
 
