@@ -643,3 +643,73 @@ class TestUnfetchedNidmInput:
         assert exit_code == 0
         mock_wrapper.return_value.process_participant.assert_called_once()
         mock_process.assert_called_once()
+
+    @not_root
+    def test_an_unreadable_subject_directory_fails_only_that_subject(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        bids_dir, nidm, link = self._two_subjects(tmp_path)
+        link.unlink()
+        (nidm / "sub-01").chmod(0)
+        try:
+            exit_code, mock_wrapper, mock_process = self._run(
+                monkeypatch, bids_dir, tmp_path / "out",
+                "--nidm-input-dir", str(nidm),
+            )
+        finally:
+            (nidm / "sub-01").chmod(0o700)
+        assert exit_code == 1
+        run = mock_wrapper.return_value.process_participant
+        assert [c.kwargs["subject_id"] for c in run.call_args_list] == ["02"]
+        assert [c.kwargs["subject_id"] for c in mock_process.call_args_list] == ["02"]
+        assert "sub-01: cannot look up its input NIDM" in caplog.text
+
+    def test_an_unlocked_pointer_file_fails_before_mriqc(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        bids_dir, nidm, link = self._two_subjects(tmp_path)
+        link.unlink()
+        link.write_text("/annex/objects/MD5E-s1234--0123456789abcdef.ttl\n")
+        exit_code, mock_wrapper, mock_process = self._run(
+            monkeypatch, bids_dir, tmp_path / "out", "--nidm-input-dir", str(nidm),
+        )
+        assert exit_code == 1
+        run = mock_wrapper.return_value.process_participant
+        assert [c.kwargs["subject_id"] for c in run.call_args_list] == ["02"]
+        assert "unlocked git-annex pointer file" in caplog.text
+        assert f"datalad get {link}" in caplog.text
+
+    def test_the_lookup_is_done_once_and_passed_on(self, tmp_path, monkeypatch):
+        bids_dir, nidm, _ = self._two_subjects(tmp_path)
+        import src.run
+        real = src.run.find_input_nidm
+        calls = []
+
+        def counting(subject_id, *args):
+            calls.append(subject_id)
+            return real(subject_id, *args)
+
+        monkeypatch.setattr("src.run.find_input_nidm", counting)
+        exit_code, _, mock_process = self._run(
+            monkeypatch, bids_dir, tmp_path / "out", "--nidm-input-dir", str(nidm),
+            "--participant-label", "02",
+        )
+        assert exit_code == 0
+        assert calls == ["02"]
+        assert mock_process.call_args.kwargs["input_nidm"] == (
+            nidm / "sub-02" / "nidm.ttl"
+        )
+
+    def test_skip_nidm_conversion_passes_no_lookup(self, tmp_path, monkeypatch):
+        bids_dir, nidm, _ = self._two_subjects(tmp_path)
+
+        def fail(*args):
+            raise AssertionError("looked up the input NIDM")
+
+        monkeypatch.setattr("src.run.find_input_nidm", fail)
+        exit_code, _, mock_process = self._run(
+            monkeypatch, bids_dir, tmp_path / "out", "--nidm-input-dir", str(nidm),
+            "--participant-label", "02", "--skip-nidm-conversion",
+        )
+        assert exit_code == 0
+        assert "input_nidm" not in mock_process.call_args.kwargs

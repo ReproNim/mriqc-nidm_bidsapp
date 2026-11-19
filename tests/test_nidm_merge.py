@@ -474,6 +474,72 @@ def test_unfetched_session_file_fails_rather_than_falling_back(
     _assert_fails_on_unfetched(ok, link, tmp_path, caplog)
 
 
+def test_unfetched_session_file_fails_beside_an_equally_specific_one(
+    tmp_path, logger, caplog, monkeypatch
+):
+    """ses-1/nidm.ttl unfetched and ses-1/sub-51209_ses-1.ttl readable: the
+    job fails rather than using the other session file, which may be a
+    different record"""
+    nidm_dir = tmp_path / "nidm"
+    link = nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(_absent_annex_object(tmp_path))
+    _write(nidm_dir / "sub-51209" / "ses-1" / "sub-51209_ses-1.ttl", "")
+    with caplog.at_level(logging.DEBUG):
+        ok = _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir)
+
+    _assert_fails_on_unfetched(ok, link, tmp_path, caplog)
+
+
+def test_unlocked_pointer_session_file_fails(tmp_path, logger, caplog, monkeypatch):
+    """An unlocked git-annex dataset keeps an unfetched file as a pointer
+    file, not a link: the job fails the same way"""
+    nidm_dir = tmp_path / "nidm"
+    pointer = _write(
+        nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl",
+        "/annex/objects/MD5E-s1234--0123456789abcdef.ttl\n",
+    )
+    with caplog.at_level(logging.DEBUG):
+        ok = _up_to_conversion(tmp_path, logger, monkeypatch, nidm_dir)
+
+    assert ok is False
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    [error] = [m for m in errors if "pointer file" in m]
+    assert f"datalad get {pointer}" in error
+    assert not any("stopped where the conversion starts" in m for m in errors)
+
+
+def test_a_passed_lookup_result_is_not_repeated(
+    tmp_path, logger, caplog, monkeypatch
+):
+    """main() passes the input it looked up; process_subject does not look
+    again (an unfetched file there would otherwise fail the job)"""
+    nidm_dir = tmp_path / "nidm"
+    link = nidm_dir / "sub-51209" / "ses-1" / "nidm.ttl"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(_absent_annex_object(tmp_path))
+
+    def stop():
+        raise RuntimeError("stopped where the conversion starts")
+
+    monkeypatch.setattr("src.run.get_mriqc_dictionary", stop)
+    output_dir = tmp_path / "out"
+    subject_dir = output_dir / "sub-51209" / "ses-1"
+    bids = tmp_path / "bids"
+    bids.mkdir()
+    with caplog.at_level(logging.DEBUG):
+        process_subject(
+            subject_id="51209", bids_dir=bids, output_dir=output_dir,
+            subject_dir=subject_dir,
+            mriqc_dir=_mriqc_tree(subject_dir, ["sub-51209_ses-1_run-1_T1w"]),
+            session_id="1", nidm_input_dir=nidm_dir, skip_mriqc=True,
+            skip_nidm=False, logger=logger, input_nidm=None,
+        )
+
+    _assert_reached_conversion(caplog)
+    assert not any("Found existing NIDM" in r.getMessage() for r in caplog.records)
+
+
 def test_unfetched_subject_level_file_fails(tmp_path, logger, caplog, monkeypatch):
     """sub-<id>/nidm.ttl unfetched, with a readable dataset-level file and
     another readable file in sub-<id>/: the job fails"""
