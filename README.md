@@ -272,6 +272,16 @@ agent `prov:SoftwareAgent` (incf-nidash/PyNIDM#457) is not rewritten. csv2nidm
 from PyNIDM 5.0.0, which the image ships, already writes `rdf:type` and types
 the agent `prov:SoftwareAgent`, so with it the rewrite changes nothing.
 
+csv2nidm reads the IQM CSV with pandas and keeps only the subject id as text,
+so a label column that looks numeric is read as numbers. When a job has images
+with and without a run (T1w next to `run-1` BOLD), run 1 came out as the text
+`"1.0"`; a session label `01` came out as `"1"`, and a numeric `acq` label as
+`1.0` (`xsd:float`). Before writing `nidm.ttl`, the app sets each IQM record's
+labels from the CSV, which keeps them as text: the run as
+`nidm:AcquisitionObject` with `xsd:int` (what csv2nidm writes when no image
+lacks a run), and session (`bids:session_number`), task (`nidm:Task`) and the
+`acq`, `ce` and `rec` labels as `xsd:string` with the text of the filename.
+
 A job fails (non-zero exit), and writes no `nidm.ttl`, when csv2nidm fails,
 when an IQM record matches no acquisition or several, or when the result does
 not hold exactly one IQM record per IQM JSON. An IQM JSON the app cannot read

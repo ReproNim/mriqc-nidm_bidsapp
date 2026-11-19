@@ -51,6 +51,7 @@ from .nidm_converter.nidm_merge import (
     check_iqm_records,
     fix_csv2nidm_types,
     merge_iqms_into_nidm,
+    restore_bids_labels,
     write_iqm_nidm,
 )
 from .validators import validate_bids_directory, validate_output_directory
@@ -147,9 +148,10 @@ def _write_iqm_nidm(
         logger=logger,
     ):
         raise RuntimeError(f"Failed to convert {iqm_csv.name} to NIDM")
-    # Before either branch, so the output carries the fix with or without an
+    # Before either branch, so the output carries the fixes with or without an
     # input NIDM.
     fix_csv2nidm_types(iqm_ttl)
+    restore_bids_labels(iqm_ttl, iqm_csv)
 
     if augmentation_target:
         merge_iqms_into_nidm(

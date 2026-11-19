@@ -17,18 +17,22 @@ BIDS name as the IQM JSON. An IQM record that matches no acquisition, or
 more than one, is an error rather than a guess.
 """
 
+import csv
 import logging
 from collections import Counter
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
-from rdflib import RDF, RDFS, Graph, Namespace, URIRef
+from rdflib import RDF, RDFS, XSD, Graph, Literal, Namespace, URIRef
 from rdflib.util import guess_format
+
+from .json_to_csv import IMAGE_ENTITIES
 
 PROV = Namespace("http://www.w3.org/ns/prov#")
 NIDM = Namespace("http://purl.org/nidash/nidm#")
 DCT = Namespace("http://purl.org/dc/terms/")
 SIO = Namespace("http://semanticscience.org/ontology/sio.owl#")
+BIDS = Namespace("http://bids.neuroimaging.io/")
 # The IQM properties' namespace (json_to_csv's software url). csv2nidm 4.x
 # binds the prefix mriqc to it. csv2nidm 5.0.0 builds its output with
 # rdflib's Graph.__add__, which binds the prefixes of both operands by
@@ -120,6 +124,97 @@ def fix_csv2nidm_types(ttl: Path) -> int:
     if added or len(graph) != before:
         graph.serialize(destination=str(ttl), format="turtle")
     return added
+
+
+def _run_literal(label: str) -> Literal:
+    """The run as csv2nidm writes it from a run column with no empty cell:
+    xsd:int, or the text when it is not a whole number."""
+    try:
+        return Literal(int(label), datatype=XSD.int)
+    except ValueError:
+        return Literal(label, datatype=XSD.string)
+
+
+def restore_bids_labels(iqm_ttl: Path, iqm_csv: Path) -> int:
+    """
+    Record each IQM record's BIDS labels as the IQM CSV holds them, in place.
+
+    csv2nidm re-reads the CSV with pandas and keeps only the subject id
+    column as text, so pandas reads any other label column that looks
+    numeric as numbers. A run column that mixes images without a run
+    (T1w) and images with one becomes float, and csv2nidm writes run 1 as
+    the text "1.0"; a session label 01 becomes "1"; a numeric acq, ce or rec
+    label becomes xsd:float 1.0, or xsd:integer 1 when no cell is empty.
+
+    Each record is matched to its CSV row by prov:Location, which csv2nidm
+    sets from the row's source_url, and gets:
+
+    - run as nidm:AcquisitionObject, xsd:int: what csv2nidm writes when the
+      run column has no empty cell, and the integer PyNIDM's schema gives
+      this property;
+    - ses as bids:session_number and task as nidm:Task, xsd:string, the
+      label text unchanged;
+    - acq, ce and rec under their data-element property, xsd:string, the
+      label text unchanged (the data dictionary's valueType).
+
+    An empty label, and the "None" task of anatomical images, gets no triple,
+    as csv2nidm does. Records without a CSV row are left as they are.
+
+    Args:
+        iqm_ttl: Turtle file written by csv2nidm; rewritten when anything changes
+        iqm_csv: The CSV csv2nidm converted (combine_iqm_csvs)
+
+    Returns:
+        Number of records changed
+    """
+    with open(iqm_csv, newline="") as f:
+        rows = {row.get("source_url"): row for row in csv.DictReader(f)}
+
+    graph = Graph()
+    graph.parse(iqm_ttl, format="turtle")
+    entity_properties = {
+        entity: [
+            cde for cde, name in graph.subject_objects(NIDM.sourceVariable)
+            if str(name) == entity
+        ]
+        for entity in IMAGE_ENTITIES
+    }
+
+    changed = 0
+    for record, location in _iqm_records(graph).items():
+        row = rows.get(location)
+        if row is None:
+            continue
+        task = row.get("task", "")
+        wanted = [
+            (NIDM.AcquisitionObject,
+             _run_literal(row["run"]) if row.get("run") else None),
+            (BIDS.session_number,
+             Literal(row["ses"], datatype=XSD.string) if row.get("ses") else None),
+            (NIDM.Task,
+             Literal(task, datatype=XSD.string) if task not in ("", "None") else None),
+        ]
+        for entity in IMAGE_ENTITIES:
+            label = row.get(entity, "")
+            for prop in entity_properties[entity]:
+                wanted.append(
+                    (prop, Literal(label, datatype=XSD.string) if label else None)
+                )
+
+        record_changed = False
+        for prop, literal in wanted:
+            current = set(graph.objects(record, prop))
+            target = {literal} if literal is not None else set()
+            if current != target:
+                graph.remove((record, prop, None))
+                if literal is not None:
+                    graph.add((record, prop, literal))
+                record_changed = True
+        changed += record_changed
+
+    if changed:
+        graph.serialize(destination=str(iqm_ttl), format="turtle")
+    return changed
 
 
 def serialize_nidm(graph: Graph, destination: Path) -> None:
@@ -302,4 +397,5 @@ __all__ = [
     "check_iqm_records",
     "fix_csv2nidm_types",
     "merge_iqms_into_nidm",
+    "restore_bids_labels",
 ]
