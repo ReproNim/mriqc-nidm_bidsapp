@@ -369,13 +369,18 @@ class TestMain:
     def _option(cmd, flag):
         return cmd[cmd.index(flag) + 1]
 
-    def test_passthrough_spelling_survives_the_gate(self, ucla, tmp_path):
-        # --fd_thres is MRIQC's own spelling; the gate copies the arguments.
+    @pytest.mark.parametrize("limit", ["2", None], ids=["gate-on", "gate-off"])
+    def test_passthrough_spelling_reaches_mriqc(self, ucla, tmp_path, limit):
+        # --fd_thres is MRIQC's own spelling; --omp_nthreads is not, and is
+        # respelled. The gate copies the arguments; with it off they go direct.
         bids, *_ = ucla
-        code, [cmd] = self._run(bids, tmp_path / "out", "--fd_thres", "0.3")
+        code, [cmd] = self._run(
+            bids, tmp_path / "out", "--fd_thres", "0.3", "--omp_nthreads", "4",
+            limit=limit)
         assert code == 0
         assert self._option(cmd, "--fd_thres") == "0.3"
-        assert "--fd-thres" not in cmd
+        assert self._option(cmd, "--omp-nthreads") == "4"
+        assert "--fd-thres" not in cmd and "--omp_nthreads" not in cmd
 
     def test_zero_padded_labels_reach_mriqc_unchanged(self, ucla, tmp_path):
         bids, *_ = ucla
@@ -514,7 +519,7 @@ class TestMain:
         filters = json.loads(Path(self._option(cmd, "--bids-filter-file")).read_text())
         assert _mriqc_selects(bids, "01", "1", "T1w", filters["t1w"]) == [fine.name]
         # The other modalities keep the run restriction MRIQC would have set.
-        assert filters["bold"] == {"run": [1, 2]}
+        assert filters["bold"] == {"run": ["1", "2"]}
 
     def test_run_id_wins_over_the_filter_run_as_in_mriqc(self, tmp_path):
         bids = _bids(tmp_path / "bids")
@@ -542,7 +547,7 @@ class TestMain:
         i = cmd.index("-m")
         assert cmd[i + 1:i + 4] == ["T2w", "bold", "dwi"]
         filters = json.loads(Path(self._option(cmd, "--bids-filter-file")).read_text())
-        assert filters["bold"] == {"run": [2]}
+        assert filters["bold"] == {"run": ["2"]}
 
     def test_run_id_matching_no_other_image_fails_before_mriqc(self, tmp_path):
         # The check for images left honours the filter: bold has run 1 only.

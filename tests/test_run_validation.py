@@ -599,6 +599,10 @@ class TestPassThroughOwnedOptions:
         (("--participant_label", "02"), "--participant-label"),
         (("--participant_label=02",), "--participant-label"),
         (("--participant_lab", "02"), "--participant-label"),
+        (("--participant-labels", "02"), "--participant-label"),
+        (("--participant_labels", "02"), "--participant-label"),
+        (("--participant_labels=02",), "--participant-label"),
+        (("--session_label", "2"), "--session-label"),
         (("--session-id", "2"), "--session-label"),
         (("--session_id", "2"), "--session-label"),
         (("--session-id=2",), "--session-label"),
@@ -615,7 +619,11 @@ class TestPassThroughOwnedOptions:
         err = capsys.readouterr().err
         assert exit_code == 2, err
         assert extra[0].partition("=")[0] in err, err
-        assert pointer in err, err
+        # The sentence, not the usage line, which names both options anyway.
+        assert (
+            f"{extra[0].partition('=')[0]} cannot be passed through to MRIQC: "
+            f"the app owns that option. Use {pointer} instead."
+        ) in err, err
         mock_wrapper.assert_not_called()
         mock_process.assert_not_called()
         assert not out_dir.exists()

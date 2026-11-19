@@ -80,13 +80,91 @@ def normalize_session_labels(labels: List[str]) -> List[str]:
     return [normalize_label(label, 'ses-') for label in labels]
 
 
+# MRIQC's long options as its parser spells them. Taken from mriqc/cli/parser.py
+# of nipreps/mriqc at the version the Dockerfile and Singularity image pin
+# (the Python side of that pin is MRIQC_OPTIONS_VERSION, checked against both
+# files by tests/test_run.py); revisit this table when the pin moves.
+# MRIQC treats - and _ as different characters: most options have dashes only,
+# a few have underscores only (fd_thres, n_procs, n_cpus, mem_gb), and
+# participant-label has all four spellings, singular and plural.
+MRIQC_OPTIONS_VERSION = "25.0.0rc0"
+MRIQC_LONG_OPTIONS = frozenset({
+    "ants-float",
+    "ants-nthreads",
+    "ants-settings",
+    "bids-database-dir",
+    "bids-database-wipe",
+    "bids-filter-file",
+    "crashfile-format",
+    "deoblique",
+    "despike",
+    "dry-run",
+    "dsname",
+    "email",
+    "fd_thres",
+    "fft-spikes-detector",
+    "float32",
+    "mem",
+    "mem-gb",
+    "mem_gb",
+    "min-bold-length",
+    "min-dwi-length",
+    "modalities",
+    "n_cpus",
+    "n_procs",
+    "no-datalad-get",
+    "no-sub",
+    "notrack",
+    "nprocs",
+    "omp-nthreads",
+    "participant-label",
+    "participant-labels",
+    "participant_label",
+    "participant_labels",
+    "pdb",
+    "profile",
+    "reports-only",
+    "resource-monitor",
+    "run-id",
+    "session-id",
+    "species",
+    "start-idx",
+    "stop-idx",
+    "task-id",
+    "testing",
+    "upload-strict",
+    "use-plugin",
+    "verbose",
+    "verbose-reports",
+    "webapi-port",
+    "webapi-url",
+    "work-dir",
+    "write-graph",
+})
+
+
+def mriqc_spelling(typed: str) -> str:
+    """The spelling MRIQC accepts for an option typed as ``typed`` (without the leading ``--``).
+
+    MRIQC treats - and _ as different characters and spells a few options with
+    underscores (fd_thres, n_procs, n_cpus, mem_gb). A typed name MRIQC does
+    not define but whose other spelling it does is respelled; an abbreviation
+    or an option this table lacks goes through as typed.
+    """
+    if typed in MRIQC_LONG_OPTIONS:
+        return typed
+    for other in (typed.replace("-", "_"), typed.replace("_", "-")):
+        if other in MRIQC_LONG_OPTIONS:
+            return other
+    return typed
+
+
 class PassThroughKey(str):
-    """An underscored option name that remembers the flag the user typed.
+    """An underscored option name that remembers the flag for MRIQC.
 
     It compares and hashes as the plain name (``fd_thres``), so lookups by
     name keep working, while ``flag`` is what goes back on MRIQC's command
-    line: MRIQC spells some options with underscores (``--fd_thres``) and most
-    with dashes, and only the user knows which.
+    line, in the spelling MRIQC defines (see ``mriqc_spelling``).
     """
 
     flag: str
@@ -96,16 +174,23 @@ class PassThroughKey(str):
         obj.flag = flag
         return obj
 
+    def __getnewargs__(self):
+        # str's own would drop the flag, and copy and pickle rebuild with it.
+        return (str(self), self.flag)
 
-# MRIQC options the app owns, with the app option to use instead. MRIQC's
-# argparse accepts underscore and dash spellings and any unambiguous prefix of
-# a name, so an option is claimed when its name, with dashes read as
-# underscores, is a prefix (at least four characters) of the owned name.
+
+# MRIQC options the app owns, with the app option to use instead. The keys are
+# the longest spelling of each, in underscore form: MRIQC's argparse accepts
+# any unambiguous prefix of an option string, so every prefix of a key is
+# claimed too (--participant_lab, --session-i). MRIQC's four participant-label
+# spellings all end up in the key "participant_labels" or a prefix of it.
+# --session_label is the app's own --session-label with an underscore, which
+# MRIQC does not define either.
 _OWNED_MRIQC_OPTIONS = {
-    "participant_label": "--participant-label",
+    "participant_labels": "--participant-label",
     "session_id": "--session-label",
+    "session_label": "--session-label",
 }
-_MIN_ABBREVIATION = 4
 
 
 def owned_mriqc_option(extra_args: List[str]) -> Optional[Tuple[str, str]]:
@@ -119,7 +204,7 @@ def owned_mriqc_option(extra_args: List[str]) -> Optional[Tuple[str, str]]:
             continue
         typed = arg.partition("=")[0]
         name = typed[2:].replace("-", "_")
-        if len(name) < _MIN_ABBREVIATION:
+        if not name:
             continue
         for owned, instead in _OWNED_MRIQC_OPTIONS.items():
             if owned.startswith(name):
@@ -163,8 +248,8 @@ def parse_mriqc_args(extra_args: List[str]) -> Dict[str, Any]:
             i += 1
             continue
         typed, eq, inline = arg[2:].partition("=")
-        # --omp-nthreads → omp_nthreads, remembering "--omp-nthreads".
-        key = PassThroughKey(typed.replace("-", "_"), f"--{typed}")
+        # --omp-nthreads → omp_nthreads, remembering the flag MRIQC defines.
+        key = PassThroughKey(typed.replace("-", "_"), f"--{mriqc_spelling(typed)}")
         if eq:
             # --bids-filter-file=/x/f.json: the value is part of the flag.
             mriqc_kwargs[key] = inline
@@ -293,7 +378,10 @@ __all__ = [
     "normalize_label",
     "normalize_participant_labels",
     "normalize_session_labels",
+    "MRIQC_LONG_OPTIONS",
+    "MRIQC_OPTIONS_VERSION",
     "PassThroughKey",
+    "mriqc_spelling",
     "owned_mriqc_option",
     "parse_mriqc_args",
     "setup_logging",

@@ -308,10 +308,6 @@ def _gate_mriqc_inputs(
         run_id = None
     if run_id is not None:
         runs = run_id if isinstance(run_id, list) else [run_id]
-        # run is an integer BIDS entity (run-01 is run 1), so the filter file
-        # carries numbers, as a hand-written one does; the pass-through
-        # itself keeps every value a string.
-        runs = [int(r) if str(r).isdigit() else r for r in runs]
         # As MRIQC's execution.init does: --run-id wins over the file's run.
         for modality in requested:
             user_filters[modality.lower()] = {
@@ -653,14 +649,17 @@ def main():
         description="MRIQC-NIDM BIDS App - Execute MRIQC and convert to NIDM format",
         epilog="""
 MRIQC Arguments:
-  Any additional arguments not listed above are passed directly to MRIQC.
+  Other arguments are passed to MRIQC as MRIQC spells them: a name MRIQC
+  defines with the other of dash and underscore is respelled (--omp_nthreads
+  reaches MRIQC as --omp-nthreads, --fd-thres as --fd_thres), and values are
+  not changed. --participant-label and --session-label belong to this app:
+  MRIQC's own --participant_label(s) and --session-id are refused.
   Common MRIQC options include:
     --mem          Maximum memory available (e.g., '16G')
     --nprocs       Maximum number of parallel processes
     --omp-nthreads Maximum number of threads per process
     --no-sub       Disable anonymized metrics submission (default behavior)
-    --ica          Run ICA denoising
-    --fd_thres     Framewise displacement threshold (MRIQC spells it with an underscore)
+    --fd_thres     Framewise displacement threshold
 
   For full MRIQC options, see: https://mriqc.readthedocs.io/
 """,

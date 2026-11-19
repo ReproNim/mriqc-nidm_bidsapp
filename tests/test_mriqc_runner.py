@@ -273,12 +273,19 @@ class TestMRIQCWrapperCommands:
     @pytest.mark.parametrize("typed, expected", [
         (["--fd_thres", "0.3"], ["--fd_thres", "0.3"]),
         (["--fd_thres=0.3"], ["--fd_thres", "0.3"]),
-        (["--fd-thres", "0.3"], ["--fd-thres", "0.3"]),
+        # MRIQC defines these with the other of dash and underscore.
+        (["--fd-thres", "0.3"], ["--fd_thres", "0.3"]),
+        (["--n-procs", "2"], ["--n_procs", "2"]),
         (["--omp-nthreads", "4"], ["--omp-nthreads", "4"]),
+        (["--omp_nthreads", "4"], ["--omp-nthreads", "4"]),
+        (["--work_dir=/w"], ["--work-dir", "/w"]),
+        (["--task_id", "a", "b"], ["--task-id", "a", "b"]),
+        (["--verbose_reports"], ["--verbose-reports"]),
+        # A name MRIQC 25.0.0rc0 does not define goes as typed.
         (["--some_flag"], ["--some_flag"]),
-        (["--task_id", "a", "b"], ["--task_id", "a", "b"]),
+        (["--some-other"], ["--some-other"]),
     ])
-    def test_passthrough_keeps_the_spelling_the_user_typed(
+    def test_passthrough_uses_the_spelling_mriqc_defines(
         self, test_dirs, mock_mriqc_version, typed, expected
     ):
         wrapper = MRIQCWrapper(
