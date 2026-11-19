@@ -586,9 +586,10 @@ class TestEmptyPathArguments:
 
 
 class TestUnfetchedNidmInput:
-    """An input NIDM file that is a broken symbolic link (an unfetched
-    git-annex file) fails its subject before MRIQC runs, and writes no
-    nidm.ttl for it."""
+    """An input NIDM file that has no content here (a broken symbolic link or
+    an unlocked git-annex pointer file) fails its subject before MRIQC runs,
+    and writes no nidm.ttl for it; so does a lookup that fails on the file
+    system, for that subject only."""
 
     def _run(self, monkeypatch, bids_dir, out_dir, *options):
         monkeypatch.setattr("src.run.check_csv2nidm_available", lambda: True)
@@ -713,3 +714,36 @@ class TestUnfetchedNidmInput:
         )
         assert exit_code == 0
         assert "input_nidm" not in mock_process.call_args.kwargs
+
+    def _session_run(self, tmp_path, monkeypatch, *, broken):
+        # BABS passes the level `participant` with --session-label.
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        nidm = tmp_path / "nidm"
+        session_file = nidm / "sub-01" / "ses-1" / "nidm.ttl"
+        session_file.parent.mkdir(parents=True)
+        if broken:
+            session_file.symlink_to(Path("..") / ".." / ".git" / "annex" / "absent")
+        else:
+            session_file.write_text("")
+        result = self._run(
+            monkeypatch, bids_dir, tmp_path / "out", "--nidm-input-dir", str(nidm),
+            "--participant-label", "01", "--session-label", "1",
+        )
+        return result, session_file
+
+    def test_a_broken_session_file_fails_a_session_run_before_mriqc(
+        self, tmp_path, monkeypatch
+    ):
+        (exit_code, mock_wrapper, mock_process), _ = self._session_run(
+            tmp_path, monkeypatch, broken=True
+        )
+        assert exit_code == 1
+        mock_wrapper.return_value.process_participant.assert_not_called()
+        mock_process.assert_not_called()
+
+    def test_a_session_run_passes_on_the_session_file(self, tmp_path, monkeypatch):
+        (exit_code, _, mock_process), session_file = self._session_run(
+            tmp_path, monkeypatch, broken=False
+        )
+        assert exit_code == 0
+        assert mock_process.call_args.kwargs["input_nidm"] == session_file

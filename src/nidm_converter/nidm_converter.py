@@ -48,7 +48,9 @@ class NIDMInputNotRetrieved(FileNotFoundError):
 
     def __init__(self, path: Path):
         self.path = path
-        self.target = os.readlink(path) if path.is_symlink() else None
+        # Only a link that is itself broken; a link that resolves to an
+        # unlocked pointer file gets the pointer-file wording.
+        self.target = os.readlink(path) if _is_broken_link(path) else None
         if self.target is not None:
             message = (
                 f"Input NIDM {path} is a broken symbolic link to {self.target}. "
@@ -58,9 +60,13 @@ class NIDMInputNotRetrieved(FileNotFoundError):
                 "only its NIDM directory)"
             )
         else:
+            shown = (
+                f"{path} (a link to {path.resolve()})" if path.is_symlink()
+                else str(path)
+            )
             message = (
-                f"Input NIDM {path} is an unlocked git-annex pointer file whose "
-                f"content was never fetched; run `datalad get {path}`"
+                f"Input NIDM {shown} is an unlocked git-annex pointer file "
+                f"whose content was never fetched; run `datalad get {path}`"
             )
         super().__init__(message)
 

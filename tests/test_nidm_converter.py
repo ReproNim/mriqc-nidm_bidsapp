@@ -505,3 +505,23 @@ def test_detect_existing_nidm_ignores_a_pointer_file_it_would_not_reach(
     assert detect_existing_nidm(
         subject_id="01", nidm_input_dir=tmp_path, logger=logger
     ) == wanted
+
+
+def test_a_link_to_a_pointer_file_is_reported_as_not_fetched(tmp_path, logger):
+    """A link that resolves to an unlocked pointer file is not broken: the
+    message says the content was not fetched, not that the link is broken"""
+    store = tmp_path / "store" / "p.ttl"
+    store.parent.mkdir()
+    store.write_text(ANNEX_POINTER)
+    link = tmp_path / "sub-01" / "nidm.ttl"
+    link.parent.mkdir()
+    link.symlink_to(Path("..") / "store" / "p.ttl")
+    with pytest.raises(NIDMInputNotRetrieved) as raised:
+        detect_existing_nidm(subject_id="01", nidm_input_dir=tmp_path, logger=logger)
+    message = str(raised.value)
+    assert raised.value.target is None
+    assert "unlocked git-annex pointer file" in message
+    assert f"datalad get {link}" in message
+    assert str(store.resolve()) in message
+    assert "broken symbolic link" not in message
+    assert "bind the dataset root" not in message

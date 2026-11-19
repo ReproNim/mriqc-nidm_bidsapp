@@ -464,8 +464,9 @@ def find_input_nidm(
 ) -> Optional[Path]:
     """The input NIDM file for the job, or None (detect_existing_nidm's lookup).
 
-    Raises NIDMInputNotRetrieved when the file the lookup would use is a
-    broken symbolic link.
+    Raises NIDMInputNotRetrieved when the file the lookup would use has no
+    content here (a broken symbolic link or an unlocked git-annex pointer
+    file).
     """
     return detect_existing_nidm(
         subject_id=subject_id,
