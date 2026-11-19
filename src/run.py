@@ -136,6 +136,7 @@ def _write_iqm_nidm(
     Raises:
         RuntimeError: If csv2nidm fails
         IQMLinkError: If an IQM record cannot be linked to the input NIDM
+        IQMLabelError: If csv2nidm's records and the CSV rows do not correspond
     """
     iqm_csv = combine_iqm_csvs(csv_paths, staging_dir / "mriqc_iqms.csv", logger)
     iqm_ttl = staging_dir / "mriqc_iqms.ttl"

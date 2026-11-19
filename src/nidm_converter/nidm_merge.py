@@ -155,13 +155,15 @@ def restore_bids_labels(iqm_ttl: Path, iqm_csv: Path) -> int:
     sets from the row's source_url, and gets:
 
     - run as nidm:AcquisitionObject, an xsd:integer in canonical form (run-01
-      gives 1). PyNIDM's run lookup (GetAcquisitionEntityFromSubjectSessionRun)
-      matches the pattern ``nidm:AcquisitionObject 1``, which in rdflib finds
-      only that literal: not xsd:int, and not a non-canonical "01".
+      gives 1): the type PyNIDM's schema gives run, and the value rdflib reads
+      bidsmri2nidm's run as ("01"^^xsd:integer parses to 1). A pattern such
+      as ``nidm:AcquisitionObject 1``, or a join on run, then matches the
+      record as it matches the acquisition; in rdflib an xsd:int would not.
     - ses as bids:session_number, task as nidm:Task, and acq, ce and rec under
       their data-element property, as plain literals with the label text
-      unchanged: the form bidsmri2nidm writes for the session number, so a
-      join on the value matches.
+      unchanged: the form bidsmri2nidm 5.0.0 writes for the session number
+      and task, so a join on the value matches. csv2nidm writes xsd:string,
+      which rdflib does not treat as equal; compare with str() to match both.
 
     An empty label, and the "None" task of anatomical images, gets no triple,
     as csv2nidm does.

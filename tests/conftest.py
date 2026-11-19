@@ -5,7 +5,7 @@ environment's interpreter whose bin directory is not on PATH, csv2nidm sits
 next to that interpreter but is not found, and every csv2nidm test would
 skip. The interpreter's directory is put on PATH first.
 
-Under CI (the CI environment variable, which GitHub Actions sets), a missing
+Under CI (CI set to true, 1 or yes, as GitHub Actions sets it), a missing
 csv2nidm stops the run instead of skipping those tests, so a PyNIDM change
 cannot pass CI untested.
 """
@@ -23,7 +23,8 @@ if shutil.which("csv2nidm") is None and (_bin / "csv2nidm").exists():
 
 
 def pytest_configure(config):
-    if os.environ.get("CI") and shutil.which("csv2nidm") is None:
+    in_ci = os.environ.get("CI", "").lower() in ("1", "true", "yes")
+    if in_ci and shutil.which("csv2nidm") is None:
         raise pytest.UsageError(
             "csv2nidm (PyNIDM) is not installed, so the csv2nidm tests would "
             "skip; install requirements.txt"

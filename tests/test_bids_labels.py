@@ -121,9 +121,10 @@ def test_numeric_session_task_and_acq_labels_keep_their_text(tmp_path, logger):
     }
 
 
-# PyNIDM's run lookup (nidm/linkml/experiment/query.py,
-# GetAcquisitionEntityFromSubjectSessionRun) puts the run into its SPARQL as
-# a bare number: ``nidm:AcquisitionObject {run}``.
+# The run fragment of PyNIDM's run lookups (nidm/linkml/experiment/query.py,
+# GetAcquisitionEntityFromSubjectSessionRun): the run as a bare number,
+# ``nidm:AcquisitionObject {run}``. Only the fragment: those functions return
+# acquisitions, never IQM records.
 RUN_PATTERN = """
     prefix nidm: <http://purl.org/nidash/nidm#>
     prefix prov: <http://www.w3.org/ns/prov#>
@@ -138,8 +139,8 @@ def _locations_with_run(ttl: Path, run: int):
 
 
 @needs_csv2nidm
-def test_pynidm_run_pattern_finds_the_iqm_record(tmp_path, logger):
-    """The `nidm:AcquisitionObject 1` pattern PyNIDM builds finds run 1's IQMs"""
+def test_run_pattern_finds_the_iqm_record(tmp_path, logger):
+    """The pattern `nidm:AcquisitionObject 1` finds run 1's IQM record"""
     ok, ttl = _run(tmp_path, MIXED_RUN_STEMS, tmp_path / "nidm", logger)
 
     assert ok is True
