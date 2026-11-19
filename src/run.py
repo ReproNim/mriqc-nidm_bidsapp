@@ -266,34 +266,87 @@ DWI_NOT_CONVERTED = (
 )
 
 
+def _is_modalities_flag(arg: str) -> bool:
+    """True for a pass-through token MRIQC reads as -m/--modalities.
+
+    MRIQC's argparse accepts any unambiguous prefix of a long option. Of its
+    options (MRIQC 25.0.0rc0) only --modalities starts with "mo", so every
+    prefix from --mo on is --modalities; --m is ambiguous with --mem and
+    --min-*-length. The =value forms count too.
+    """
+    if arg == "-m":
+        return True
+    if not arg.startswith("--"):
+        return False
+    name = arg[2:].partition("=")[0]
+    return len(name) >= 2 and "modalities".startswith(name)
+
+
 def _explicit_dwi_request(mriqc_extra_args: List[str]) -> bool:
     """True if the MRIQC options name dwi in -m/--modalities.
 
-    A bare -m, or none, is not an explicit request: MRIQC then runs every
-    modality, and the dwi IQMs are left out of the NIDM conversion instead.
+    Read as MRIQC reads them: under any spelling of the option, and, when it
+    is given more than once, from the last one (-m T1w --mod dwi asks for dwi
+    only). A bare -m, or none, is not an explicit request: MRIQC then runs
+    every modality, and the dwi IQMs are left out of the NIDM conversion
+    instead.
     """
-    requested = parse_mriqc_args(mriqc_extra_args).get("modalities")
-    if requested is True or not requested:
-        return False
-    if not isinstance(requested, list):
-        requested = [requested]
+    requested: List[str] = []
+    i = 0
+    while i < len(mriqc_extra_args):
+        arg = mriqc_extra_args[i]
+        i += 1
+        if not _is_modalities_flag(arg):
+            continue
+        _, eq, inline = arg.partition("=")
+        if eq:
+            requested = [inline]
+            continue
+        requested = []
+        while i < len(mriqc_extra_args) and not mriqc_extra_args[i].startswith("-"):
+            requested.append(mriqc_extra_args[i])
+            i += 1
     return "dwi" in requested
 
 
 def _without_dwi_iqms(
-    json_files: List[Path], logger: logging.Logger
+    json_files: List[Path],
+    mriqc_dir: Path,
+    subject_dir: Path,
+    logger: logging.Logger,
 ) -> List[Path]:
     """The IQM JSONs that are not dwi; the dwi ones are logged in one warning.
 
     They come from MRIQC run without -m, which rates dwi too, or from a
-    --mriqc-output-dir that holds them.
+    --mriqc-output-dir that holds them. They are also listed, relative to
+    mriqc_dir, under "dwi_iqms_not_converted" in the subject's
+    processing_summary.json, so a nidm.ttl without them is explained in the
+    subject's own output and not only in the job log.
     """
     dwi = [f for f in json_files if is_dwi_iqm_json(f)]
+    summary_file = subject_dir / "processing_summary.json"
+    summary = (
+        json.loads(summary_file.read_text()) if summary_file.exists() else {}
+    )
     if dwi:
         logger.warning(
             f"Not converting {len(dwi)} dwi IQM JSON file(s) to NIDM, "
             f"{DWI_NOT_CONVERTED}: " + ", ".join(f.name for f in dwi)
         )
+        summary["dwi_iqms_not_converted"] = [
+            f.relative_to(mriqc_dir).as_posix() for f in dwi
+        ]
+    elif "dwi_iqms_not_converted" in summary:
+        # From an earlier run over other MRIQC output (--skip-mriqc keeps
+        # the summary).
+        del summary["dwi_iqms_not_converted"]
+    else:
+        return json_files
+    if summary:
+        subject_dir.mkdir(parents=True, exist_ok=True)
+        summary_file.write_text(json.dumps(summary, indent=2))
+    else:
+        summary_file.unlink()
     return [f for f in json_files if not is_dwi_iqm_json(f)]
 
 
@@ -512,7 +565,7 @@ def process_subject(
             return True
 
         # dwi IQMs never reach csv2nidm (see DWI_NOT_CONVERTED).
-        json_files = _without_dwi_iqms(json_files, logger)
+        json_files = _without_dwi_iqms(json_files, mriqc_dir, subject_dir, logger)
         if not json_files:
             logger.error(
                 f"No NIDM written for sub-{subject_id}: its only MRIQC JSON "
@@ -705,8 +758,9 @@ MRIQC Arguments:
     --ica          Run ICA denoising
     --fd-radius    Framewise displacement radius (default: 50mm)
     -m/--modalities  Modalities to rate (T1w T2w bold dwi; default: all).
-                   dwi needs --skip-nidm-conversion: dwi IQMs cannot be
-                   converted to NIDM yet.
+                   When the app runs MRIQC, dwi needs
+                   --skip-nidm-conversion: dwi IQMs cannot be converted
+                   to NIDM yet.
 
   For full MRIQC options, see: https://mriqc.readthedocs.io/
 """,
@@ -769,9 +823,10 @@ MRIQC Arguments:
         "--skip-nidm-conversion",
         action="store_true",
         help=(
-            "Run MRIQC only, skip NIDM conversion. Required to name dwi in "
-            "MRIQC's -m/--modalities: dwi IQMs cannot be converted to NIDM "
-            "yet. Without -m, MRIQC rates dwi and the NIDM conversion leaves "
+            "Run MRIQC only, skip NIDM conversion. When the app runs MRIQC "
+            "(no --skip-mriqc or --mriqc-output-dir), required to name dwi "
+            "in MRIQC's -m/--modalities: dwi IQMs cannot be converted to "
+            "NIDM yet. Without -m, MRIQC rates dwi and the NIDM conversion leaves "
             "its IQMs out with a warning"
         ),
     )

@@ -18,7 +18,12 @@ from unittest.mock import patch
 import pytest
 
 from src.mriqc.mriqc_runner import is_dwi_iqm_json
-from src.run import main, process_subject
+from src.run import (
+    _explicit_dwi_request,
+    _is_modalities_flag,
+    main,
+    process_subject,
+)
 
 
 def _bids(root):
@@ -114,6 +119,19 @@ class TestExplicitDwiRequest:
         ["-m", "T1w", "dwi"],
         ["--modalities", "T1w", "bold", "dwi"],
         ["--modalities=dwi"],
+        # dwi not the last value.
+        ["-m", "dwi", "T1w"],
+        # Prefixes MRIQC reads as --modalities.
+        ["--mo", "dwi"],
+        ["--mod", "T1w", "dwi"],
+        ["--modalitie", "dwi"],
+        ["--mod=dwi"],
+        ["--mo=dwi"],
+        # Repeated: MRIQC keeps the last one, which asks for dwi.
+        ["-m", "T1w", "--mod", "dwi"],
+        ["--mod", "T1w", "-m", "dwi"],
+        ["-m", "T1w", "-m", "dwi"],
+        ["--modalities", "bold", "--nprocs", "2", "--mo=dwi"],
     ])
     def test_is_a_usage_error_with_nidm_conversion(
         self, tmp_path, monkeypatch, capsys, modalities
@@ -211,9 +229,12 @@ class TestDwiIqmsLeftOut:
                 skip_mriqc=True, skip_nidm=False,
                 logger=logging.getLogger("test-dwi"),
             ) is False
+        # csv2nidm is never reached (the writer is mocked, so this call
+        # count, not the absence of nidm.ttl, is the check).
         write.assert_not_called()
-        assert not (out / "sub-01" / "nidm.ttl").exists()
         assert len(_dwi_warnings(caplog)) == 1
+        summary = json.loads((out / "sub-01" / "processing_summary.json").read_text())
+        assert summary == {"dwi_iqms_not_converted": ["sub-01/dwi/sub-01_dwi.json"]}
 
     def test_no_warning_with_skip_nidm(self, tmp_path, caplog):
         mriqc_dir = tmp_path / "mriqc"
@@ -258,3 +279,111 @@ class TestDwiIqmsLeftOut:
         warnings = _dwi_warnings(caplog)
         assert len(warnings) == 1
         assert f"sub-01{ent}_run-1_dwi.json" in warnings[0].getMessage()
+
+
+class TestModalitiesSpelling:
+    @pytest.mark.parametrize("arg", [
+        "-m", "--mo", "--mod", "--modalitie", "--modalities",
+        "--mod=dwi", "--modalities=T1w",
+    ])
+    def test_read_as_modalities(self, arg):
+        assert _is_modalities_flag(arg)
+
+    @pytest.mark.parametrize("arg", [
+        # --m is ambiguous in MRIQC (--mem, --min-*-length).
+        "--m", "--m=dwi", "--mem", "--mem-gb", "--min-dwi-length",
+        "--modalitiesx", "--nprocs", "dwi", "-v",
+    ])
+    def test_not_read_as_modalities(self, arg):
+        assert not _is_modalities_flag(arg)
+
+    @pytest.mark.parametrize("extra", [
+        # The last -m/--modalities wins in MRIQC, and it asks for no dwi.
+        ["-m", "dwi", "--mod", "T1w"],
+        ["--mod=dwi", "-m", "T1w", "bold"],
+        ["-m", "dwi", "-m", "T1w"],
+        # dwi as the value of another option.
+        ["--min-dwi-length", "7"],
+        ["--mem", "8", "-m", "T1w"],
+    ])
+    def test_not_an_explicit_request(self, extra):
+        assert not _explicit_dwi_request(extra)
+
+    def test_skip_mriqc_with_dwi_is_not_a_usage_error(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # MRIQC is not run, so -m has no effect; dwi IQMs already in the
+        # subject's mriqc/ are left out of the conversion instead.
+        bids_dir, out_dir = _bids(tmp_path / "bids"), tmp_path / "out"
+        existing = out_dir / "sub-01" / "mriqc" / "sub-01"
+        _iqm_json(existing / "anat" / "sub-01_T1w.json")
+        _iqm_json(existing / "dwi" / "sub-01_dwi.json")
+        monkeypatch.setattr(sys, "argv", _argv(
+            bids_dir, out_dir, "--skip-mriqc", "-m", "dwi"))
+        with caplog.at_level(logging.INFO), \
+                patch("src.run.MRIQCWrapper") as wrapper, \
+                patch("src.run.check_csv2nidm_available", return_value=True), \
+                patch("src.run._write_iqm_nidm") as write, \
+                patch("src.run.check_iqm_records", return_value=[]):
+            assert main() == 0
+        wrapper.assert_not_called()
+        assert [p.name for p in write.call_args.kwargs["csv_paths"]] == [
+            "sub-01_T1w.csv"
+        ]
+        assert len(_dwi_warnings(caplog)) == 1
+
+
+class TestProcessingSummary:
+    def _run(self, tmp_path, rels, subject_dir):
+        mriqc_dir = tmp_path / "mriqc"
+        for rel in rels:
+            _iqm_json(mriqc_dir / "sub-01" / rel)
+        out = tmp_path / "out"
+        out.mkdir(exist_ok=True)
+        with patch("src.run._write_iqm_nidm"), \
+                patch("src.run.check_iqm_records", return_value=[]):
+            return process_subject(
+                subject_id="01", bids_dir=tmp_path / "bids", output_dir=out,
+                subject_dir=subject_dir, mriqc_dir=mriqc_dir,
+                session_id="1", nidm_input_dir=None,
+                skip_mriqc=True, skip_nidm=False,
+                logger=logging.getLogger("test-dwi"),
+            )
+
+    def test_mixed_subject_lists_the_dwi_iqms_beside_existing_entries(
+        self, tmp_path
+    ):
+        subject_dir = tmp_path / "out" / "sub-01" / "ses-1"
+        subject_dir.mkdir(parents=True)
+        # As the --max-voxel-size gate writes it before MRIQC runs.
+        gate = {"max_voxel_size": 2.0, "inputs_too_coarse": {},
+                "inputs_not_checked": [], "modalities_not_run": []}
+        (subject_dir / "processing_summary.json").write_text(json.dumps(gate))
+        assert self._run(tmp_path, [
+            "ses-1/anat/sub-01_ses-1_run-1_T1w.json",
+            "ses-1/dwi/sub-01_ses-1_run-1_dwi.json",
+            "ses-1/dwi/sub-01_ses-1_run-2_dwi.json",
+        ], subject_dir) is True
+        summary = json.loads((subject_dir / "processing_summary.json").read_text())
+        assert summary == {**gate, "dwi_iqms_not_converted": [
+            "sub-01/ses-1/dwi/sub-01_ses-1_run-1_dwi.json",
+            "sub-01/ses-1/dwi/sub-01_ses-1_run-2_dwi.json",
+        ]}
+
+    def test_stale_entry_is_removed_when_no_dwi_is_left_out(self, tmp_path):
+        subject_dir = tmp_path / "out" / "sub-01" / "ses-1"
+        subject_dir.mkdir(parents=True)
+        (subject_dir / "processing_summary.json").write_text(json.dumps(
+            {"max_voxel_size": 2.0, "dwi_iqms_not_converted": ["old.json"]}))
+        assert self._run(
+            tmp_path, ["ses-1/anat/sub-01_ses-1_T1w.json"], subject_dir
+        ) is True
+        summary = json.loads((subject_dir / "processing_summary.json").read_text())
+        assert summary == {"max_voxel_size": 2.0}
+
+    def test_no_summary_without_dwi(self, tmp_path):
+        subject_dir = tmp_path / "out" / "sub-01" / "ses-1"
+        assert self._run(
+            tmp_path, ["ses-1/anat/sub-01_ses-1_T1w.json"], subject_dir
+        ) is True
+        assert not (subject_dir / "processing_summary.json").exists()
