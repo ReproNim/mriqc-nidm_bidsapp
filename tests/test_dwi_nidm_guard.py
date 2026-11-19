@@ -387,3 +387,13 @@ class TestProcessingSummary:
             tmp_path, ["ses-1/anat/sub-01_ses-1_T1w.json"], subject_dir
         ) is True
         assert not (subject_dir / "processing_summary.json").exists()
+
+    def test_summary_holding_only_a_stale_entry_is_removed(self, tmp_path):
+        subject_dir = tmp_path / "out" / "sub-01" / "ses-1"
+        subject_dir.mkdir(parents=True)
+        (subject_dir / "processing_summary.json").write_text(json.dumps(
+            {"dwi_iqms_not_converted": ["old.json"]}))
+        assert self._run(
+            tmp_path, ["ses-1/anat/sub-01_ses-1_T1w.json"], subject_dir
+        ) is True
+        assert not (subject_dir / "processing_summary.json").exists()
