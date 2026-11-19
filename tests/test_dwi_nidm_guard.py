@@ -501,6 +501,31 @@ class TestUnreadableProcessingSummary:
                 skip_mriqc=True, skip_nidm=False,
                 logger=logging.getLogger("test-dwi"),
             ) is True
-        assert json.loads((subject_dir / "processing_summary.json").read_text()) == {
-            "dwi_iqms_not_converted": ["sub-01/dwi/sub-01_dwi.json"]
-        }
+        summary = json.loads((subject_dir / "processing_summary.json").read_text())
+        assert summary.keys() == {"earlier_summary_unreadable", "dwi_iqms_not_converted"}
+        assert summary["earlier_summary_unreadable"]
+        assert summary["dwi_iqms_not_converted"] == ["sub-01/dwi/sub-01_dwi.json"]
+        messages = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert [m for m in messages if m.startswith("Replacing unreadable")]
+        assert not [m for m in messages if m.startswith("Ignoring unreadable")]
+
+    def test_directory_in_its_place_without_dwi_is_ignored(self, tmp_path, caplog):
+        # Reading it raises an OSError (IsADirectoryError), not a ValueError.
+        mriqc_dir = tmp_path / "mriqc"
+        _iqm_json(mriqc_dir / "sub-01" / "anat" / "sub-01_T1w.json")
+        subject_dir = tmp_path / "out" / "sub-01"
+        (subject_dir / "processing_summary.json").mkdir(parents=True)
+        with caplog.at_level(logging.INFO), \
+                patch("src.run._write_iqm_nidm") as write, \
+                patch("src.run.check_iqm_records", return_value=[]):
+            assert process_subject(
+                subject_id="01", bids_dir=tmp_path / "bids",
+                output_dir=tmp_path / "out", subject_dir=subject_dir,
+                mriqc_dir=mriqc_dir, session_id=None, nidm_input_dir=None,
+                skip_mriqc=True, skip_nidm=False,
+                logger=logging.getLogger("test-dwi"),
+            ) is True
+        write.assert_called_once()
+        assert (subject_dir / "processing_summary.json").is_dir()
+        assert [r for r in caplog.records
+                if r.levelno == logging.WARNING and "Ignoring unreadable" in r.getMessage()]

@@ -25,7 +25,7 @@ import signal
 import sys
 import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from . import __version__
 from .mriqc.inputs import gate_anat_inputs
@@ -299,13 +299,17 @@ def _without_dwi_iqms(
     """
     dwi = [f for f in json_files if is_dwi_iqm_json(f)]
     summary_file = subject_dir / "processing_summary.json"
-    summary = _read_processing_summary(summary_file, logger)
+    summary, unreadable = _read_processing_summary(summary_file)
     if dwi:
         logger.warning(
             f"Not converting {len(dwi)} dwi IQM JSON file(s) to NIDM, "
             f"{DWI_NOT_CONVERTED}: " + ", ".join(f.name for f in dwi)
         )
-        summary = summary if summary is not None else {}
+        if summary is None:
+            # What it held cannot be kept; say so in the file, so a summary
+            # without the gate's keys is not read as the gate finding nothing.
+            logger.warning(f"Replacing unreadable {summary_file} ({unreadable})")
+            summary = {"earlier_summary_unreadable": unreadable}
         summary["dwi_iqms_not_converted"] = [
             f.relative_to(mriqc_dir).as_posix() for f in dwi
         ]
@@ -315,6 +319,8 @@ def _without_dwi_iqms(
         del summary["dwi_iqms_not_converted"]
     else:
         # Nothing to record, or an unreadable summary to leave as it is.
+        if summary is None:
+            logger.warning(f"Ignoring unreadable {summary_file} ({unreadable})")
         return json_files
     if summary:
         subject_dir.mkdir(parents=True, exist_ok=True)
@@ -324,14 +330,13 @@ def _without_dwi_iqms(
     return [f for f in json_files if not is_dwi_iqm_json(f)]
 
 
-def _read_processing_summary(
-    summary_file: Path, logger: logging.Logger
-) -> Optional[dict]:
-    """The subject's processing_summary.json as a dict: {} when there is none,
-    None (with a warning) when it is not a JSON object, for example a file
-    left empty or cut short by a job killed while writing it."""
+def _read_processing_summary(summary_file: Path) -> Tuple[Optional[dict], str]:
+    """The subject's processing_summary.json as a dict, and why it could not
+    be read: ({}, "") when there is none, (None, reason) when it cannot be
+    read or is not a JSON object, for example a file left empty or cut short
+    by a job killed while writing it."""
     if not summary_file.exists():
-        return {}
+        return {}, ""
     try:
         summary = json.loads(summary_file.read_text())
     except (OSError, ValueError) as e:
@@ -339,9 +344,8 @@ def _read_processing_summary(
     else:
         reason = "not a JSON object"
     if isinstance(summary, dict):
-        return summary
-    logger.warning(f"Ignoring unreadable {summary_file} ({reason})")
-    return None
+        return summary, ""
+    return None, reason
 
 
 def _gate_mriqc_inputs(

@@ -313,6 +313,9 @@ fails in a batch job without writing `nidm.ttl`. So:
   IQM JSONs out, logs one warning that lists them, and converts the others.
   The left-out files are also listed, relative to the MRIQC output directory,
   under `dwi_iqms_not_converted` in the subject's `processing_summary.json`.
+  A summary that cannot be read (for example one cut short by a killed job)
+  is replaced, with `earlier_summary_unreadable` giving the reason; without
+  dwi IQMs it is left as it is. Either way the app logs a warning.
   A failure in MRIQC's dwi workflow still fails the subject, like any other
   MRIQC failure; pass `-m T1w T2w bold` to avoid running it.
 - dwi IQM JSONs found in `--mriqc-output-dir`, or left by an earlier run, are
