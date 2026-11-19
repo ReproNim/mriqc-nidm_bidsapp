@@ -20,10 +20,11 @@ import pytest
 from src.mriqc.mriqc_runner import is_dwi_iqm_json
 from src.run import (
     _explicit_dwi_request,
-    _is_modalities_flag,
     main,
     process_subject,
 )
+from src.utils import is_modalities_flag as _is_modalities_flag, parse_mriqc_args
+from src.mriqc.mriqc_runner import MRIQCWrapper
 
 
 def _bids(root):
@@ -397,3 +398,109 @@ class TestProcessingSummary:
             tmp_path, ["ses-1/anat/sub-01_ses-1_T1w.json"], subject_dir
         ) is True
         assert not (subject_dir / "processing_summary.json").exists()
+
+
+def _mriqc_replica():
+    """MRIQC 25.0.0rc0's parser, as far as the modalities and the options
+    sharing a prefix with them go (mriqc/cli/parser.py): -m/--modalities is
+    store with nargs='*', and abbreviations are allowed."""
+    import argparse
+
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("bids_dir")
+    p.add_argument("output_dir")
+    p.add_argument("analysis_level")
+    p.add_argument("-m", "--modalities", nargs="*",
+                   choices=["T1w", "T2w", "bold", "dwi"])
+    for opt in ("--mem", "--mem-gb", "--mem_gb", "--min-bold-length",
+                "--min-dwi-length", "--nprocs", "-w", "--participant-label"):
+        p.add_argument(opt)
+    p.add_argument("--no-sub", action="store_true")
+    p.add_argument("-v", action="count")
+    return p
+
+
+class TestCheckAgreesWithTheBuiltCommand:
+    """The usage check judges the MRIQC command the app builds, read the
+    way MRIQC reads it."""
+
+    @pytest.mark.parametrize("extra", [
+        ["-m", "dwi"],
+        ["-m", "dwi", "T1w"],
+        ["--mod", "dwi"],
+        ["--mo=dwi"],
+        ["-m", "T1w", "--mod", "dwi"],
+        ["--mod", "T1w", "-m", "dwi"],
+        ["-m", "dwi", "--mod", "T1w"],
+        ["--mod=dwi", "-m", "T1w", "bold"],
+        ["--mod", "dwi", "-m", "T1w"],
+        ["--mo", "dwi", "--modalities", "T1w"],
+        ["--mod", "dwi", "--modalities=T1w"],
+        ["--mod", "T1w", "--mo", "dwi", "--mod", "bold"],
+        ["--mod", "T1w", "--mo", "bold", "--mod", "dwi"],
+        ["--modalities", "bold", "--nprocs", "2", "--mo=dwi"],
+        ["-m", "T1w", "-m", "dwi"],
+        ["-m", "dwi", "-m", "T1w"],
+        ["--min-dwi-length", "7", "-m", "T1w"],
+        ["--mem", "8", "--mod", "dwi"],
+    ])
+    def test_agreement(self, tmp_path, extra):
+        # The constructor asks the mriqc executable for its version.
+        with patch("src.mriqc.mriqc_runner.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = "MRIQC v25.0.0rc0\n"
+            wrapper = MRIQCWrapper(
+                bids_dir=tmp_path / "bids", output_dir=tmp_path / "out"
+            )
+        cmd = wrapper._create_mriqc_command(
+            output_dir=tmp_path / "out", subject_id="01", **parse_mriqc_args(extra)
+        )
+        assert cmd[0] == "mriqc"
+        ns, _ = _mriqc_replica().parse_known_args(cmd[1:])
+        mriqc_rates_dwi_only_on_request = "dwi" in (ns.modalities or [])
+        assert _explicit_dwi_request(extra) == mriqc_rates_dwi_only_on_request
+        # One -m at most, and no abbreviation left for MRIQC to resolve.
+        assert cmd.count("-m") <= 1
+        assert not [a for a in cmd if a.startswith("--mo")]
+
+
+class TestUnreadableProcessingSummary:
+    @pytest.mark.parametrize("content", ["", '{"max_voxel_size": 2.0, "inputs_too', "[1, 2]"])
+    def test_skip_mriqc_without_dwi_converts_and_keeps_the_file(
+        self, tmp_path, monkeypatch, caplog, content
+    ):
+        bids_dir, out_dir = _bids(tmp_path / "bids"), tmp_path / "out"
+        _iqm_json(out_dir / "sub-01" / "mriqc" / "sub-01" / "anat" / "sub-01_T1w.json")
+        summary_file = out_dir / "sub-01" / "processing_summary.json"
+        summary_file.write_text(content)
+        monkeypatch.setattr(sys, "argv", _argv(bids_dir, out_dir, "--skip-mriqc"))
+        with caplog.at_level(logging.INFO), \
+                patch("src.run.check_csv2nidm_available", return_value=True), \
+                patch("src.run._write_iqm_nidm") as write, \
+                patch("src.run.check_iqm_records", return_value=[]):
+            assert main() == 0
+        write.assert_called_once()
+        assert summary_file.read_text() == content
+        assert [r for r in caplog.records
+                if r.levelno == logging.WARNING and "Ignoring unreadable" in r.getMessage()]
+
+    def test_with_dwi_is_replaced_by_the_dwi_entry(self, tmp_path, caplog):
+        mriqc_dir = tmp_path / "mriqc"
+        _iqm_json(mriqc_dir / "sub-01" / "anat" / "sub-01_T1w.json")
+        _iqm_json(mriqc_dir / "sub-01" / "dwi" / "sub-01_dwi.json")
+        subject_dir = tmp_path / "out" / "sub-01"
+        subject_dir.mkdir(parents=True)
+        (subject_dir / "processing_summary.json").write_text('{"max_vox')
+        with caplog.at_level(logging.INFO), \
+                patch("src.run._write_iqm_nidm"), \
+                patch("src.run.check_iqm_records", return_value=[]):
+            assert process_subject(
+                subject_id="01", bids_dir=tmp_path / "bids",
+                output_dir=tmp_path / "out", subject_dir=subject_dir,
+                mriqc_dir=mriqc_dir, session_id=None, nidm_input_dir=None,
+                skip_mriqc=True, skip_nidm=False,
+                logger=logging.getLogger("test-dwi"),
+            ) is True
+        assert json.loads((subject_dir / "processing_summary.json").read_text()) == {
+            "dwi_iqms_not_converted": ["sub-01/dwi/sub-01_dwi.json"]
+        }

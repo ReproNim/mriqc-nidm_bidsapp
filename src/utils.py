@@ -80,6 +80,23 @@ def normalize_session_labels(labels: List[str]) -> List[str]:
     return [normalize_label(label, 'ses-') for label in labels]
 
 
+def is_modalities_flag(arg: str) -> bool:
+    """True for a pass-through token MRIQC reads as -m/--modalities.
+
+    MRIQC's argparse accepts any unambiguous prefix of a long option. Of its
+    options (MRIQC 25.0.0rc0) only --modalities starts with "mo", so every
+    prefix from --mo on is --modalities; --m is ambiguous with --mem and
+    --min-*-length. The =value forms count too. -m<value> and -m=<value>
+    are not recognised.
+    """
+    if arg == "-m":
+        return True
+    if not arg.startswith("--"):
+        return False
+    name = arg[2:].partition("=")[0]
+    return len(name) >= 2 and "modalities".startswith(name)
+
+
 def parse_mriqc_args(extra_args: List[str]) -> Dict[str, Any]:
     """
     Parse MRIQC extra arguments into kwargs dictionary.
@@ -115,9 +132,12 @@ def parse_mriqc_args(extra_args: List[str]) -> Dict[str, Any]:
     while i < len(extra_args):
         arg = extra_args[i]
         # MRIQC's -m is its only short option that takes values; others
-        # (-w, -v) are not passed through.
-        if arg == "-m":
-            arg = "--modalities"
+        # (-w, -v) are not passed through. -m and every prefix MRIQC reads
+        # as --modalities share one key, so a repeated option keeps only its
+        # last value and MRIQC gets a single -m.
+        if is_modalities_flag(arg):
+            _, eq, inline = arg.partition("=")
+            arg = "--modalities" + eq + inline
         if not arg.startswith("--"):
             i += 1
             continue

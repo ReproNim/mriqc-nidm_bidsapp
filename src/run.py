@@ -266,46 +266,20 @@ DWI_NOT_CONVERTED = (
 )
 
 
-def _is_modalities_flag(arg: str) -> bool:
-    """True for a pass-through token MRIQC reads as -m/--modalities.
-
-    MRIQC's argparse accepts any unambiguous prefix of a long option. Of its
-    options (MRIQC 25.0.0rc0) only --modalities starts with "mo", so every
-    prefix from --mo on is --modalities; --m is ambiguous with --mem and
-    --min-*-length. The =value forms count too.
-    """
-    if arg == "-m":
-        return True
-    if not arg.startswith("--"):
-        return False
-    name = arg[2:].partition("=")[0]
-    return len(name) >= 2 and "modalities".startswith(name)
-
-
 def _explicit_dwi_request(mriqc_extra_args: List[str]) -> bool:
-    """True if the MRIQC options name dwi in -m/--modalities.
+    """True if the MRIQC command the app builds names dwi in -m.
 
-    Read as MRIQC reads them: under any spelling of the option, and, when it
-    is given more than once, from the last one (-m T1w --mod dwi asks for dwi
-    only). A bare -m, or none, is not an explicit request: MRIQC then runs
-    every modality, and the dwi IQMs are left out of the NIDM conversion
-    instead.
+    Read from parse_mriqc_args, which builds that command: it gives -m,
+    --modalities and its prefixes (--mo, --mod, ...) one key, and the last
+    of them wins. A bare -m, or none, is not an explicit request: MRIQC then
+    runs every modality, and the dwi IQMs are left out of the NIDM
+    conversion instead.
     """
-    requested: List[str] = []
-    i = 0
-    while i < len(mriqc_extra_args):
-        arg = mriqc_extra_args[i]
-        i += 1
-        if not _is_modalities_flag(arg):
-            continue
-        _, eq, inline = arg.partition("=")
-        if eq:
-            requested = [inline]
-            continue
-        requested = []
-        while i < len(mriqc_extra_args) and not mriqc_extra_args[i].startswith("-"):
-            requested.append(mriqc_extra_args[i])
-            i += 1
+    requested = parse_mriqc_args(mriqc_extra_args).get("modalities")
+    if requested is True or not requested:
+        return False
+    if not isinstance(requested, list):
+        requested = [requested]
     return "dwi" in requested
 
 
@@ -325,22 +299,22 @@ def _without_dwi_iqms(
     """
     dwi = [f for f in json_files if is_dwi_iqm_json(f)]
     summary_file = subject_dir / "processing_summary.json"
-    summary = (
-        json.loads(summary_file.read_text()) if summary_file.exists() else {}
-    )
+    summary = _read_processing_summary(summary_file, logger)
     if dwi:
         logger.warning(
             f"Not converting {len(dwi)} dwi IQM JSON file(s) to NIDM, "
             f"{DWI_NOT_CONVERTED}: " + ", ".join(f.name for f in dwi)
         )
+        summary = summary if summary is not None else {}
         summary["dwi_iqms_not_converted"] = [
             f.relative_to(mriqc_dir).as_posix() for f in dwi
         ]
-    elif "dwi_iqms_not_converted" in summary:
+    elif summary is not None and "dwi_iqms_not_converted" in summary:
         # From an earlier run over other MRIQC output (--skip-mriqc keeps
         # the summary).
         del summary["dwi_iqms_not_converted"]
     else:
+        # Nothing to record, or an unreadable summary to leave as it is.
         return json_files
     if summary:
         subject_dir.mkdir(parents=True, exist_ok=True)
@@ -348,6 +322,26 @@ def _without_dwi_iqms(
     else:
         summary_file.unlink()
     return [f for f in json_files if not is_dwi_iqm_json(f)]
+
+
+def _read_processing_summary(
+    summary_file: Path, logger: logging.Logger
+) -> Optional[dict]:
+    """The subject's processing_summary.json as a dict: {} when there is none,
+    None (with a warning) when it is not a JSON object, for example a file
+    left empty or cut short by a job killed while writing it."""
+    if not summary_file.exists():
+        return {}
+    try:
+        summary = json.loads(summary_file.read_text())
+    except (OSError, ValueError) as e:
+        summary, reason = None, str(e)
+    else:
+        reason = "not a JSON object"
+    if isinstance(summary, dict):
+        return summary
+    logger.warning(f"Ignoring unreadable {summary_file} ({reason})")
+    return None
 
 
 def _gate_mriqc_inputs(
@@ -1010,8 +1004,9 @@ MRIQC Arguments:
                 if session_id:
                     filter_name += f"_ses-{session_id}"
                 run_kwargs = mriqc_kwargs
-                # Only the gate writes it, so a summary from an earlier run
-                # with other settings must not survive into this one's zip.
+                # The gate and the NIDM conversion rewrite it, so a summary
+                # from an earlier run with other settings must not survive
+                # into this one's zip.
                 (subject_dir / "processing_summary.json").unlink(missing_ok=True)
                 try:
                     if args.max_voxel_size is not None:

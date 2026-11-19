@@ -299,9 +299,12 @@ dictionary does not describe, asks for an annotation on standard input, which
 fails in a batch job without writing `nidm.ttl`. So:
 
 - Naming `dwi` in MRIQC's `-m`/`--modalities` in a run that starts MRIQC
-  and converts to NIDM is a usage error (status 2), before MRIQC starts. Any
-  spelling MRIQC reads as `--modalities` counts (`--mod dwi`, `--mod=dwi`),
-  and when the option is given more than once the last one does, as in MRIQC.
+  and converts to NIDM is a usage error (status 2), before MRIQC starts. The
+  app passes MRIQC a single `-m`: `-m`, `--modalities` and every long prefix
+  of it from `--mo` on, with or without `=`, are one option, and when it is
+  given more than once the last one counts. The attached short forms
+  `-mdwi` and `-m=dwi` are not recognised: the app drops them, so MRIQC
+  rates every modality and the dwi IQMs are left out as below.
   Drop `dwi` (`-m T1w T2w bold`), or add `--skip-nidm-conversion` to rate dwi
   without NIDM conversion. With `--skip-mriqc` or `--mriqc-output-dir` MRIQC
   does not run, `-m` has no effect, and it is not checked.
