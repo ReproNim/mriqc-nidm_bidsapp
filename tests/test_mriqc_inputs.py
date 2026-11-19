@@ -377,6 +377,15 @@ class TestMain:
         assert self._option(cmd, "--fd_thres") == "0.3"
         assert "--fd-thres" not in cmd
 
+    def test_zero_padded_labels_reach_mriqc_unchanged(self, ucla, tmp_path):
+        bids, *_ = ucla
+        code, [cmd] = self._run(
+            bids, tmp_path / "out", "--task-id", "01", "02", "--run-id=01", limit=None)
+        assert code == 0
+        i = cmd.index("--task-id")
+        assert cmd[i:i + 3] == ["--task-id", "01", "02"]
+        assert self._option(cmd, "--run-id") == "01"
+
     def test_mriqc_gets_a_filter_without_the_slab(self, ucla, tmp_path):
         bids, fine, slab = ucla
         code, calls = self._run(bids, tmp_path / "out")

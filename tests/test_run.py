@@ -6,18 +6,28 @@ These tests verify the CLI argument parsing and passthrough functionality.
 """
 
 
-from src.utils import parse_mriqc_args
+import pytest
+
+from src.utils import owned_mriqc_option, parse_mriqc_args
 
 
 class TestParseMriqcArgs:
     """Test MRIQC argument parsing functionality."""
+
+    def test_zero_padded_labels_keep_their_padding(self):
+        # task-01 and task-1 are different BIDS entities.
+        assert parse_mriqc_args(["--task-id", "01"]) == {"task_id": "01"}
+        assert parse_mriqc_args(["--task-id=01"]) == {"task_id": "01"}
+        assert parse_mriqc_args(["--task-id", "01", "02", "rest"]) == {
+            "task_id": ["01", "02", "rest"]}
+        assert parse_mriqc_args(["--run-id", "01", "2"]) == {"run_id": ["01", "2"]}
 
     def test_parse_key_value_pairs(self):
         """Test parsing key-value argument pairs."""
         args = ["--mem", "16G", "--nprocs", "12", "--omp-nthreads", "8"]
         result = parse_mriqc_args(args)
 
-        assert result == {"mem": "16G", "nprocs": 12, "omp_nthreads": 8}
+        assert result == {"mem": "16G", "nprocs": "12", "omp_nthreads": "8"}
 
     def test_parse_boolean_flags(self):
         """Test parsing boolean flag arguments."""
@@ -31,11 +41,11 @@ class TestParseMriqcArgs:
         args = ["--mem", "16G", "--ica", "--nprocs", "4"]
         result = parse_mriqc_args(args)
 
-        assert result == {"mem": "16G", "ica": True, "nprocs": 4}
+        assert result == {"mem": "16G", "ica": True, "nprocs": "4"}
 
     def test_parse_multiple_values(self):
         args = ["--modalities", "T1w", "bold", "--nprocs", "4"]
-        assert parse_mriqc_args(args) == {"modalities": ["T1w", "bold"], "nprocs": 4}
+        assert parse_mriqc_args(args) == {"modalities": ["T1w", "bold"], "nprocs": "4"}
 
     def test_parse_short_modalities_flag(self):
         assert parse_mriqc_args(["-m", "T1w", "bold"]) == {"modalities": ["T1w", "bold"]}
@@ -52,12 +62,12 @@ class TestParseMriqcArgs:
 
         assert result == {}
 
-    def test_parse_float_value(self):
-        """Test parsing float values."""
+    def test_parse_number_like_value_stays_a_string(self):
+        """A value is a string unless MRIQC's option is known to be numeric."""
         args = ["--fd-radius", "45.5"]
         result = parse_mriqc_args(args)
 
-        assert result == {"fd_radius": 45.5}
+        assert result == {"fd_radius": "45.5"}
 
     def test_parse_string_value_not_number(self):
         """Test that non-numeric strings are kept as strings."""
@@ -105,5 +115,25 @@ class TestParseMriqcArgs:
         result = parse_mriqc_args(args)
 
         assert result["mem"] == "16G"
-        assert result["nprocs"] == 12
-        assert result["omp_nthreads"] == 8
+        assert result["nprocs"] == "12"
+        assert result["omp_nthreads"] == "8"
+
+
+class TestOwnedOptions:
+    """owned_mriqc_option finds the pass-through flags the app owns."""
+
+    @pytest.mark.parametrize("typed, flag", [
+        (["--participant_label", "2"], "--participant_label"),
+        (["--participant-label", "2"], "--participant-label"),
+        (["--participant_label=2"], "--participant_label"),
+        (["--participant_lab", "2"], "--participant_lab"),
+    ])
+    def test_finds_the_owned_flag(self, typed, flag):
+        assert owned_mriqc_option(typed)[0] == flag
+
+    @pytest.mark.parametrize("typed", [
+        [], ["--task-id", "01"], ["--fd_thres", "0.3"], ["-m", "T1w"],
+        ["--bids-filter-file=participant_label"],
+    ])
+    def test_ignores_everything_else(self, typed):
+        assert owned_mriqc_option(typed) is None

@@ -32,6 +32,7 @@ from .mriqc.inputs import gate_anat_inputs
 from .mriqc.mriqc_runner import MRIQCWrapper, is_iqm_json
 from .utils import (
     normalize_label,
+    owned_mriqc_option,
     parse_mriqc_args,
     setup_logging,
     create_dataset_description,
@@ -307,6 +308,10 @@ def _gate_mriqc_inputs(
         run_id = None
     if run_id is not None:
         runs = run_id if isinstance(run_id, list) else [run_id]
+        # run is an integer BIDS entity (run-01 is run 1), so the filter file
+        # carries numbers, as a hand-written one does; the pass-through
+        # itself keeps every value a string.
+        runs = [int(r) if str(r).isdigit() else r for r in runs]
         # As MRIQC's execution.init does: --run-id wins over the file's run.
         for modality in requested:
             user_filters[modality.lower()] = {
@@ -748,6 +753,12 @@ MRIQC Arguments:
 
     # Usage errors like argparse's own (exit status 2), before anything is
     # created or started.
+    owned = owned_mriqc_option(mriqc_extra_args)
+    if owned:
+        parser.error(
+            f"{owned[0]} cannot be passed through to MRIQC: the app owns "
+            f"that option. Use {owned[1]} instead."
+        )
     for dest, name in _PATH_ARGUMENTS:
         value = getattr(args, dest)
         if value is None:

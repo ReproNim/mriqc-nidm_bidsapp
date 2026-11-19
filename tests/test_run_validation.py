@@ -583,3 +583,46 @@ class TestEmptyPathArguments:
         }
         kwargs = mock_process.call_args.kwargs
         assert (kwargs["bids_dir"], kwargs["output_dir"]) == (bids_dir, out_dir)
+
+
+class TestPassThroughOwnedOptions:
+    """Options the app owns cannot be passed through to MRIQC.
+
+    --participant_label would land after the app's own --participant-label and
+    MRIQC keeps the last value, so MRIQC would process one subject while the
+    app writes NIDM for another.
+    """
+
+    @pytest.mark.parametrize("extra, pointer", [
+        (("--participant_label", "02"), "--participant-label"),
+        (("--participant_label=02",), "--participant-label"),
+        (("--participant_lab", "02"), "--participant-label"),
+    ])
+    def test_rejected_with_a_usage_error(
+        self, tmp_path, monkeypatch, capsys, extra, pointer
+    ):
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        out_dir = tmp_path / "out"
+        exit_code, mock_wrapper, mock_process = _run_main(
+            monkeypatch, bids_dir, out_dir, "--participant-label", "01", *extra
+        )
+        err = capsys.readouterr().err
+        assert exit_code == 2, err
+        assert extra[0].partition("=")[0] in err, err
+        assert pointer in err, err
+        mock_wrapper.assert_not_called()
+        mock_process.assert_not_called()
+        assert not out_dir.exists()
+
+    def test_other_options_still_pass_through(self, tmp_path, monkeypatch, capsys):
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        exit_code, mock_wrapper, _ = _run_main(
+            monkeypatch, bids_dir, tmp_path / "out",
+            "--participant-label", "01", "--task-id", "01", "--fd_thres", "0.3",
+            "--skip-nidm-conversion",
+        )
+        assert exit_code == 0, capsys.readouterr().err
+        mock_wrapper.return_value.process_participant.assert_called_once()
+        kwargs = mock_wrapper.return_value.process_participant.call_args.kwargs
+        assert kwargs["task_id"] == "01"
+        assert kwargs["fd_thres"] == "0.3"

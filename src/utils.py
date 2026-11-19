@@ -9,7 +9,7 @@ metadata creation.
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 # BIDS specification version declared in the dataset_description.json files this
 # app writes. This is the *spec* version, never a library version (pybids'
@@ -97,16 +97,48 @@ class PassThroughKey(str):
         return obj
 
 
+# MRIQC options the app owns, with the app option to use instead. MRIQC's
+# argparse accepts underscore and dash spellings and any unambiguous prefix of
+# a name, so an option is claimed when its name, with dashes read as
+# underscores, is a prefix (at least four characters) of the owned name.
+_OWNED_MRIQC_OPTIONS = {
+    "participant_label": "--participant-label",
+}
+_MIN_ABBREVIATION = 4
+
+
+def owned_mriqc_option(extra_args: List[str]) -> Optional[Tuple[str, str]]:
+    """The first pass-through flag that names an option the app owns.
+
+    Returns ``(flag as typed, app option to use)``, or None. Only an option's
+    own name is read, never a value.
+    """
+    for arg in extra_args:
+        if not arg.startswith("--"):
+            continue
+        typed = arg.partition("=")[0]
+        name = typed[2:].replace("-", "_")
+        if len(name) < _MIN_ABBREVIATION:
+            continue
+        for owned, instead in _OWNED_MRIQC_OPTIONS.items():
+            if owned.startswith(name):
+                return typed, instead
+    return None
+
+
 def parse_mriqc_args(extra_args: List[str]) -> Dict[str, Any]:
     """
     Parse MRIQC extra arguments into kwargs dictionary.
 
     Converts command-line style arguments into a dictionary suitable for
     passing to MRIQCWrapper. Handles both key-value pairs and boolean flags.
+    Values stay strings: they only go back onto MRIQC's command line, and a
+    BIDS label such as ``--task-id 01`` is not the number 1. (MRIQC's own
+    numeric options are not known here, so none is converted.)
 
     Examples:
         >>> parse_mriqc_args(['--mem', '16G', '--nprocs', '12'])
-        {'mem': '16G', 'nprocs': 12}
+        {'mem': '16G', 'nprocs': '12'}
         >>> parse_mriqc_args(['--ica', '--no-sub'])
         {'ica': True, 'no_sub': True}
         >>> parse_mriqc_args(['-m', 'T1w', 'bold', '--bids-filter-file=f.json'])
@@ -118,15 +150,6 @@ def parse_mriqc_args(extra_args: List[str]) -> Dict[str, Any]:
     Returns:
         Dictionary of parsed arguments with underscored keys
     """
-    def _number(value: str) -> Any:
-        try:
-            return int(value)
-        except ValueError:
-            try:
-                return float(value)
-            except ValueError:
-                return value  # Keep as string
-
     mriqc_kwargs: Dict[str, Any] = {}
     i = 0
     while i < len(extra_args):
@@ -143,14 +166,14 @@ def parse_mriqc_args(extra_args: List[str]) -> Dict[str, Any]:
         key = PassThroughKey(typed.replace("-", "_"), f"--{typed}")
         if eq:
             # --bids-filter-file=/x/f.json: the value is part of the flag.
-            mriqc_kwargs[key] = _number(inline)
+            mriqc_kwargs[key] = inline
             i += 1
             continue
         # Every value up to the next flag: --modalities T1w bold takes both.
         values = []
         i += 1
         while i < len(extra_args) and not extra_args[i].startswith("-"):
-            values.append(_number(extra_args[i]))
+            values.append(extra_args[i])
             i += 1
         if not values:
             mriqc_kwargs[key] = True  # Boolean flag
@@ -270,6 +293,7 @@ __all__ = [
     "normalize_participant_labels",
     "normalize_session_labels",
     "PassThroughKey",
+    "owned_mriqc_option",
     "parse_mriqc_args",
     "setup_logging",
     "create_dataset_description",
