@@ -247,7 +247,32 @@ directory is usually a datalad subdataset that was never installed
 the last value is the one used and checked. Without the option, a
 missing `<bids_dir>/../NIDM` is not an error, and neither is a directory that
 holds no file for the subject: the app then writes `nidm.ttl` without an input
-document.
+document. When the NIDM input directory exists (given or default) but has no
+file for the job's subject or session, the log has a WARNING before the
+conversion that names the subject, the session and the reason (no directory
+for the subject, no file for the session, or a per-session input on a run
+without `--session-label`). The warning does not fail the job.
+
+A git-annex file whose content is not here counts as a file that exists: a
+broken symbolic link (a locked file whose content was never fetched) or a small
+pointer file starting with `/annex/objects/` (an unlocked one). When the file
+the lookup would use is one, the subject fails before MRIQC runs, with an error
+naming the file and suggesting `datalad get <path>`, and no `nidm.ttl` is
+written for it; the app exits 1. For a broken link the error also gives the
+link's target, since a link also breaks when its target is outside what the
+container can see: git-annex links are relative and point into the dataset's
+`.git/annex`, so bind the dataset root, not only its NIDM directory. The
+lookup does not skip a file it would use because its content is missing,
+since a readable later candidate may be a different record: a broken
+`ses-{label}/nidm.ttl` fails the subject even when
+`ses-{label}/sub-{id}_ses-{label}.ttl`, a file in `sub-{id}/` or the
+dataset-level `nidm.ttl` is readable. A file the lookup would not reach is not
+an error, for example a broken dataset-level `nidm.ttl` when the subject has a
+readable file of its own. A subject whose lookup fails for another reason (an
+unreadable directory, say) also fails before MRIQC; the other subjects of the
+run go on. A missing NIDM directory, or one with no file for the subject, still
+gives a standalone `nidm.ttl` as above. With `--skip-nidm-conversion` the input
+NIDM is not read and an unfetched file does not fail the job.
 
 #### How IQM records are written
 
@@ -277,6 +302,32 @@ csv2nidm also gives the IQM records and the agent their NIDM types through
 agent `prov:SoftwareAgent` (incf-nidash/PyNIDM#457) is not rewritten. csv2nidm
 from PyNIDM 5.0.0, which the image ships, already writes `rdf:type` and types
 the agent `prov:SoftwareAgent`, so with it the rewrite changes nothing.
+
+csv2nidm reads the IQM CSV with pandas and keeps only the subject id as text,
+so a label column that looks numeric is read as numbers. When a job has images
+with and without a run (T1w next to `run-1` BOLD), run 1 came out as the text
+`"1.0"`; a session label `01` came out as `"1"`, and a numeric `acq` label as
+`1.0` (`xsd:float`). Before writing `nidm.ttl`, the app sets each IQM record's
+labels from the CSV:
+
+- the run as `nidm:AcquisitionObject`, an `xsd:integer` in canonical form
+  (`run-01` gives `1`): the type PyNIDM's schema gives the run, and the value
+  bidsmri2nidm's run reads back as from its Turtle (rdflib reads
+  `"01"^^xsd:integer` as `1`). A pattern such as `nidm:AcquisitionObject 1`,
+  or a join on the run, therefore matches the IQM record as it matches the
+  input's acquisition. A run label that is not a whole number is kept as text;
+- session (`bids:session_number`), task (`nidm:Task`) and the `acq`, `ce` and
+  `rec` labels as plain literals with the text of the filename, the form
+  bidsmri2nidm 5.0.0 writes for the session number and task, so a SPARQL join
+  on the session matches the input's Session. csv2nidm, PyNIDM's documented
+  query shapes and input NIDM from bidsmri2nidm 4.5.0 use `xsd:string` for
+  these instead, and rdflib does not treat `"rest"` and `"rest"^^xsd:string`
+  as equal; a query meant to match either form should compare with `str()`,
+  e.g. `FILTER(str(?task) = "rest")`.
+
+An empty label, and the `None` task of anatomical images, gets no triple. If
+csv2nidm's records and the CSV rows do not correspond one to one (by the IQM
+JSON path), the job fails rather than writing labels it could not check.
 
 A job fails (non-zero exit), and writes no `nidm.ttl`, when csv2nidm fails,
 when an IQM record matches no acquisition or several, or when the result does
