@@ -583,3 +583,237 @@ class TestEmptyPathArguments:
         }
         kwargs = mock_process.call_args.kwargs
         assert (kwargs["bids_dir"], kwargs["output_dir"]) == (bids_dir, out_dir)
+
+
+class TestPassThroughOwnedOptions:
+    """Options the app owns cannot be passed through to MRIQC.
+
+    --participant_label would land after the app's own --participant-label and
+    MRIQC keeps the last value, so MRIQC would process one subject while the
+    app writes NIDM for another. --session-id would collide with the session
+    the app passes itself (process_participant() got multiple values for
+    keyword argument 'session_id').
+    """
+
+    @pytest.mark.parametrize("extra, pointer", [
+        (("--participant_label", "02"), "--participant-label"),
+        (("--participant_label=02",), "--participant-label"),
+        (("--participant_lab", "02"), "--participant-label"),
+        (("--participant-labels", "02"), "--participant-label"),
+        (("--participant_labels", "02"), "--participant-label"),
+        (("--participant_labels=02",), "--participant-label"),
+        (("--session_label", "2"), "--session-label"),
+        (("--session-id", "2"), "--session-label"),
+        (("--session_id", "2"), "--session-label"),
+        (("--session-id=2",), "--session-label"),
+        (("--session_i", "2"), "--session-label"),
+    ])
+    def test_rejected_with_a_usage_error(
+        self, tmp_path, monkeypatch, capsys, extra, pointer
+    ):
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        out_dir = tmp_path / "out"
+        exit_code, mock_wrapper, mock_process = _run_main(
+            monkeypatch, bids_dir, out_dir, "--participant-label", "01", *extra
+        )
+        err = capsys.readouterr().err
+        assert exit_code == 2, err
+        assert extra[0].partition("=")[0] in err, err
+        # The sentence, not the usage line, which names both options anyway.
+        assert (
+            f"{extra[0].partition('=')[0]} cannot be passed through to MRIQC: "
+            f"the app owns that option. Use {pointer} instead."
+        ) in err, err
+        mock_wrapper.assert_not_called()
+        mock_process.assert_not_called()
+        assert not out_dir.exists()
+
+    def test_session_label_is_still_the_way_to_pick_a_session(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        exit_code, mock_wrapper, _ = _run_main(
+            monkeypatch, bids_dir, tmp_path / "out",
+            "--participant-label", "01", "--session-label", "2",
+            "--skip-nidm-conversion",
+        )
+        assert exit_code == 0, capsys.readouterr().err
+        kwargs = mock_wrapper.return_value.process_participant.call_args.kwargs
+        assert kwargs["session_id"] == "2"
+
+    def test_other_options_still_pass_through(self, tmp_path, monkeypatch, capsys):
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        exit_code, mock_wrapper, _ = _run_main(
+            monkeypatch, bids_dir, tmp_path / "out",
+            "--participant-label", "01", "--task-id", "01", "--fd_thres", "0.3",
+            "--skip-nidm-conversion",
+        )
+        assert exit_code == 0, capsys.readouterr().err
+        mock_wrapper.return_value.process_participant.assert_called_once()
+        kwargs = mock_wrapper.return_value.process_participant.call_args.kwargs
+        assert kwargs["task_id"] == "01"
+        assert kwargs["fd_thres"] == "0.3"
+
+
+class TestUnfetchedNidmInput:
+    """An input NIDM file that has no content here (a broken symbolic link or
+    an unlocked git-annex pointer file) fails its subject before MRIQC runs,
+    and writes no nidm.ttl for it; so does a lookup that fails on the file
+    system, for that subject only."""
+
+    def _run(self, monkeypatch, bids_dir, out_dir, *options):
+        monkeypatch.setattr("src.run.check_csv2nidm_available", lambda: True)
+        monkeypatch.setattr(
+            "src.run.pynidm_installation", lambda: ("test", "test")
+        )
+        return _run_main(monkeypatch, bids_dir, out_dir, *options)
+
+    def _two_subjects(self, tmp_path):
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        anat = bids_dir / "sub-02" / "anat"
+        anat.mkdir(parents=True)
+        (anat / "sub-02_T1w.nii.gz").write_bytes(b"")
+        nidm = tmp_path / "nidm"
+        link = nidm / "sub-01" / "nidm.ttl"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(Path("..") / ".git" / "annex" / "objects" / "absent")
+        (nidm / "sub-02").mkdir()
+        (nidm / "sub-02" / "nidm.ttl").write_text("")
+        return bids_dir, nidm, link
+
+    def test_fails_the_subject_before_mriqc(self, tmp_path, monkeypatch, caplog):
+        bids_dir, nidm, link = self._two_subjects(tmp_path)
+        exit_code, mock_wrapper, mock_process = self._run(
+            monkeypatch, bids_dir, tmp_path / "out", "--nidm-input-dir", str(nidm)
+        )
+        assert exit_code == 1
+        run = mock_wrapper.return_value.process_participant
+        assert [c.kwargs["subject_id"] for c in run.call_args_list] == ["02"]
+        assert [c.kwargs["subject_id"] for c in mock_process.call_args_list] == ["02"]
+        assert f"datalad get {link}" in caplog.text
+        assert not (tmp_path / "out" / "sub-01" / "nidm.ttl").exists()
+
+    def test_fails_before_mriqc_with_a_single_subject(
+        self, tmp_path, monkeypatch
+    ):
+        bids_dir, nidm, _ = self._two_subjects(tmp_path)
+        exit_code, mock_wrapper, mock_process = self._run(
+            monkeypatch, bids_dir, tmp_path / "out", "--nidm-input-dir", str(nidm),
+            "--participant-label", "01",
+        )
+        assert exit_code == 1
+        mock_wrapper.return_value.process_participant.assert_not_called()
+        mock_process.assert_not_called()
+
+    def test_skip_nidm_conversion_does_not_look(self, tmp_path, monkeypatch):
+        bids_dir, nidm, _ = self._two_subjects(tmp_path)
+        exit_code, mock_wrapper, mock_process = self._run(
+            monkeypatch, bids_dir, tmp_path / "out", "--nidm-input-dir", str(nidm),
+            "--participant-label", "01", "--skip-nidm-conversion",
+        )
+        assert exit_code == 0
+        mock_wrapper.return_value.process_participant.assert_called_once()
+        mock_process.assert_called_once()
+
+    @not_root
+    def test_an_unreadable_subject_directory_fails_only_that_subject(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        bids_dir, nidm, link = self._two_subjects(tmp_path)
+        link.unlink()
+        (nidm / "sub-01").chmod(0)
+        try:
+            exit_code, mock_wrapper, mock_process = self._run(
+                monkeypatch, bids_dir, tmp_path / "out",
+                "--nidm-input-dir", str(nidm),
+            )
+        finally:
+            (nidm / "sub-01").chmod(0o700)
+        assert exit_code == 1
+        run = mock_wrapper.return_value.process_participant
+        assert [c.kwargs["subject_id"] for c in run.call_args_list] == ["02"]
+        assert [c.kwargs["subject_id"] for c in mock_process.call_args_list] == ["02"]
+        assert "sub-01: cannot look up its input NIDM" in caplog.text
+
+    def test_an_unlocked_pointer_file_fails_before_mriqc(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        bids_dir, nidm, link = self._two_subjects(tmp_path)
+        link.unlink()
+        link.write_text("/annex/objects/MD5E-s1234--0123456789abcdef.ttl\n")
+        exit_code, mock_wrapper, mock_process = self._run(
+            monkeypatch, bids_dir, tmp_path / "out", "--nidm-input-dir", str(nidm),
+        )
+        assert exit_code == 1
+        run = mock_wrapper.return_value.process_participant
+        assert [c.kwargs["subject_id"] for c in run.call_args_list] == ["02"]
+        assert "unlocked git-annex pointer file" in caplog.text
+        assert f"datalad get {link}" in caplog.text
+
+    def test_the_lookup_is_done_once_and_passed_on(self, tmp_path, monkeypatch):
+        bids_dir, nidm, _ = self._two_subjects(tmp_path)
+        import src.run
+        real = src.run.find_input_nidm
+        calls = []
+
+        def counting(subject_id, *args):
+            calls.append(subject_id)
+            return real(subject_id, *args)
+
+        monkeypatch.setattr("src.run.find_input_nidm", counting)
+        exit_code, _, mock_process = self._run(
+            monkeypatch, bids_dir, tmp_path / "out", "--nidm-input-dir", str(nidm),
+            "--participant-label", "02",
+        )
+        assert exit_code == 0
+        assert calls == ["02"]
+        assert mock_process.call_args.kwargs["input_nidm"] == (
+            nidm / "sub-02" / "nidm.ttl"
+        )
+
+    def test_skip_nidm_conversion_passes_no_lookup(self, tmp_path, monkeypatch):
+        bids_dir, nidm, _ = self._two_subjects(tmp_path)
+
+        def fail(*args):
+            raise AssertionError("looked up the input NIDM")
+
+        monkeypatch.setattr("src.run.find_input_nidm", fail)
+        exit_code, _, mock_process = self._run(
+            monkeypatch, bids_dir, tmp_path / "out", "--nidm-input-dir", str(nidm),
+            "--participant-label", "02", "--skip-nidm-conversion",
+        )
+        assert exit_code == 0
+        assert "input_nidm" not in mock_process.call_args.kwargs
+
+    def _session_run(self, tmp_path, monkeypatch, *, broken):
+        # BABS passes the level `participant` with --session-label.
+        bids_dir = _write_bids_tree(tmp_path / "bids")
+        nidm = tmp_path / "nidm"
+        session_file = nidm / "sub-01" / "ses-1" / "nidm.ttl"
+        session_file.parent.mkdir(parents=True)
+        if broken:
+            session_file.symlink_to(Path("..") / ".." / ".git" / "annex" / "absent")
+        else:
+            session_file.write_text("")
+        result = self._run(
+            monkeypatch, bids_dir, tmp_path / "out", "--nidm-input-dir", str(nidm),
+            "--participant-label", "01", "--session-label", "1",
+        )
+        return result, session_file
+
+    def test_a_broken_session_file_fails_a_session_run_before_mriqc(
+        self, tmp_path, monkeypatch
+    ):
+        (exit_code, mock_wrapper, mock_process), _ = self._session_run(
+            tmp_path, monkeypatch, broken=True
+        )
+        assert exit_code == 1
+        mock_wrapper.return_value.process_participant.assert_not_called()
+        mock_process.assert_not_called()
+
+    def test_a_session_run_passes_on_the_session_file(self, tmp_path, monkeypatch):
+        (exit_code, _, mock_process), session_file = self._session_run(
+            tmp_path, monkeypatch, broken=False
+        )
+        assert exit_code == 0
+        assert mock_process.call_args.kwargs["input_nidm"] == session_file

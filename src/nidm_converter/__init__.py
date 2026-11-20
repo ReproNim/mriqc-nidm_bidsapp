@@ -14,6 +14,7 @@ Modules:
 """
 
 from .nidm_converter import (
+    NIDMInputNotRetrieved,
     detect_existing_nidm,
     copy_and_prepare_nidm,
 )
@@ -30,6 +31,7 @@ from .nidm_utils import (
 __version__ = "0.1.0"
 
 __all__ = [
+    "NIDMInputNotRetrieved",
     "detect_existing_nidm",
     "copy_and_prepare_nidm",
     "convert_mriqc_json_to_csv",

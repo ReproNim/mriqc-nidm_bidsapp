@@ -32,11 +32,13 @@ from .mriqc.inputs import gate_anat_inputs
 from .mriqc.mriqc_runner import MRIQCWrapper, is_dwi_iqm_json, is_iqm_json
 from .utils import (
     normalize_label,
+    owned_mriqc_option,
     parse_mriqc_args,
     setup_logging,
     create_dataset_description,
 )
 from .nidm_converter import (
+    NIDMInputNotRetrieved,
     convert_csv_to_nidm,
     convert_mriqc_json_to_csv,
     detect_existing_nidm,
@@ -45,12 +47,16 @@ from .nidm_converter import (
 )
 from .check_pynidm import pynidm_installation
 from .nidm_converter.csv_to_nidm import check_csv2nidm_available
-from .nidm_converter.nidm_converter import TEMPORARY_PREFIX
+from .nidm_converter.nidm_converter import (
+    TEMPORARY_PREFIX,
+    session_nidm_candidates,
+)
 from .nidm_converter.json_to_csv import combine_iqm_csvs, extract_session_label
 from .nidm_converter.nidm_merge import (
     check_iqm_records,
     fix_csv2nidm_types,
     merge_iqms_into_nidm,
+    restore_bids_labels,
     write_iqm_nidm,
 )
 from .validators import validate_bids_directory, validate_output_directory
@@ -135,6 +141,7 @@ def _write_iqm_nidm(
     Raises:
         RuntimeError: If csv2nidm fails
         IQMLinkError: If an IQM record cannot be linked to the input NIDM
+        IQMLabelError: If csv2nidm's records and the CSV rows do not correspond
     """
     iqm_csv = combine_iqm_csvs(csv_paths, staging_dir / "mriqc_iqms.csv", logger)
     iqm_ttl = staging_dir / "mriqc_iqms.ttl"
@@ -147,9 +154,10 @@ def _write_iqm_nidm(
         logger=logger,
     ):
         raise RuntimeError(f"Failed to convert {iqm_csv.name} to NIDM")
-    # Before either branch, so the output carries the fix with or without an
+    # Before either branch, so the output carries the fixes with or without an
     # input NIDM.
     fix_csv2nidm_types(iqm_ttl)
+    restore_bids_labels(iqm_ttl, iqm_csv)
 
     if augmentation_target:
         merge_iqms_into_nidm(
@@ -478,6 +486,95 @@ def _iqm_jsons_of_session(
     return in_session
 
 
+def _why_no_input_nidm(
+    nidm_root: Path, subject_id: str, session_id: Optional[str]
+) -> str:
+    """The reason the lookup of detect_existing_nidm found no file in nidm_root.
+
+    A broken symbolic link among the files that lookup tries is not a reason
+    here: the lookup raises NIDMInputNotRetrieved for it and the job fails.
+    """
+    subject_root = nidm_root / f"sub-{subject_id}"
+    session_files = session_nidm_candidates(nidm_root, subject_id, session_id)
+    if not subject_root.is_dir():
+        return f"it has no sub-{subject_id} directory and no nidm.ttl"
+    if session_id:
+        names = " or ".join(str(p.relative_to(subject_root)) for p in session_files)
+        return (
+            f"{subject_root} has no {names}, and no NIDM file for the whole "
+            "subject"
+        )
+    if any(subject_root.glob("ses-*/*.ttl")):
+        return (
+            f"{subject_root} keeps its NIDM per session; pass --session-label "
+            "to add the IQMs to one session's NIDM"
+        )
+    return f"{subject_root} has no NIDM file"
+
+
+def _log_missing_input_nidm(
+    subject_id: str,
+    session_id: Optional[str],
+    nidm_input_dir: Optional[Path],
+    bids_dir: Path,
+    logger: logging.Logger,
+) -> None:
+    """Say that a job writes a standalone nidm.ttl because no input NIDM was found.
+
+    A NIDM directory that exists but has no file for this job is a warning:
+    the dataset has NIDM, this subject or session is missing from it, and the
+    job still succeeds. Under BABS the job log is the only place this shows.
+    With no NIDM directory at all, the run is standalone by choice.
+    """
+    nidm_root = nidm_input_dir if nidm_input_dir else bids_dir.parent / "NIDM"
+    job = f"sub-{subject_id}" + (f" ses-{session_id}" if session_id else "")
+    standalone = (
+        "writing a standalone nidm.ttl that is not linked to the subject's "
+        "other NIDM records"
+    )
+    if nidm_root.is_dir():
+        reason = _why_no_input_nidm(nidm_root, subject_id, session_id)
+        logger.warning(
+            f"No NIDM input for {job} in {nidm_root}: {reason}; {standalone}"
+        )
+    elif os.path.lexists(nidm_root):
+        logger.warning(
+            f"No NIDM input for {job}: {nidm_root} is not a directory (or is a "
+            f"broken symbolic link); {standalone}"
+        )
+    else:
+        logger.info(
+            f"No NIDM input for {job} ({nidm_root} does not exist): "
+            "writing a standalone nidm.ttl"
+        )
+
+
+def find_input_nidm(
+    subject_id: str,
+    session_id: Optional[str],
+    nidm_input_dir: Optional[Path],
+    bids_dir: Path,
+    logger: logging.Logger,
+) -> Optional[Path]:
+    """The input NIDM file for the job, or None (detect_existing_nidm's lookup).
+
+    Raises NIDMInputNotRetrieved when the file the lookup would use has no
+    content here (a broken symbolic link or an unlocked git-annex pointer
+    file).
+    """
+    return detect_existing_nidm(
+        subject_id=subject_id,
+        nidm_input_dir=nidm_input_dir,
+        bids_dir=bids_dir if not nidm_input_dir else None,
+        logger=logger,
+        session_id=session_id,
+    )
+
+
+# process_subject's default for input_nidm: look the input NIDM up itself.
+LOOK_UP = object()
+
+
 def process_subject(
     subject_id: str,
     bids_dir: Path,
@@ -489,6 +586,7 @@ def process_subject(
     skip_mriqc: bool,
     skip_nidm: bool,
     logger: logging.Logger,
+    input_nidm=LOOK_UP,
 ) -> bool:
     """
     Process a single subject through the MRIQC → NIDM pipeline.
@@ -504,6 +602,8 @@ def process_subject(
         skip_mriqc: Skip MRIQC execution (use existing output)
         skip_nidm: Skip NIDM conversion
         logger: Logger instance
+        input_nidm: The input NIDM file main() already looked up (a Path, or
+            None for no input); left out, it is looked up here
 
     Returns:
         True if successful, False otherwise
@@ -511,16 +611,7 @@ def process_subject(
     logger.info(f"Processing subject: sub-{subject_id}")
 
     try:
-        # Step 1: Detect existing NIDM input
-        existing_nidm = detect_existing_nidm(
-            subject_id=subject_id,
-            nidm_input_dir=nidm_input_dir,
-            bids_dir=bids_dir if not nidm_input_dir else None,
-            logger=logger,
-            session_id=session_id,
-        )
-
-        # Step 2: Find MRIQC outputs
+        # Step 1: Find MRIQC outputs
         # MRIQC keeps its own BIDS-derivative structure inside mriqc_dir, so the
         # IQM JSONs live at <mriqc_dir>/sub-<id>/[ses-<x>/]{anat,func}/*.json.
         subject_mriqc_dir = mriqc_dir / f"sub-{subject_id}"
@@ -571,6 +662,21 @@ def process_subject(
             )
             return False
 
+        # Step 2: The existing NIDM input. main() looks it up before MRIQC
+        # runs and passes the result; a caller that does not is served here,
+        # only after the --skip-nidm return: a run that writes no NIDM does
+        # not read the input either, so an unfetched input must not fail it.
+        if input_nidm is LOOK_UP:
+            try:
+                existing_nidm = find_input_nidm(
+                    subject_id, session_id, nidm_input_dir, bids_dir, logger
+                )
+            except NIDMInputNotRetrieved as e:
+                logger.error(f"sub-{subject_id}: {e}")
+                return False
+        else:
+            existing_nidm = input_nidm
+
         # Step 3: Process each MRIQC JSON file.
         # The session is decided by the caller (--session-label), not sniffed from
         # filenames -- it determines the output directory, so it has to be known
@@ -604,6 +710,14 @@ def process_subject(
                 "it with bidsmri2nidm."
             )
             return False
+
+        # Logged here, after the checks that end the job before any conversion
+        # starts, so a job stopped by them does not announce a standalone
+        # nidm.ttl. A conversion that fails later can still leave none.
+        if existing_nidm is None:
+            _log_missing_input_nidm(
+                subject_id, session_id, nidm_input_dir, bids_dir, logger
+            )
 
         # NIDM output sits directly in the subject directory, beside the analysis
         # results, and is ALWAYS named nidm.ttl -- subject identity is carried by
@@ -747,14 +861,17 @@ def main():
         description="MRIQC-NIDM BIDS App - Execute MRIQC and convert to NIDM format",
         epilog="""
 MRIQC Arguments:
-  Any additional arguments not listed above are passed directly to MRIQC.
+  Other arguments are passed to MRIQC as MRIQC spells them: a name MRIQC
+  defines with the other of dash and underscore is respelled (--omp_nthreads
+  reaches MRIQC as --omp-nthreads, --fd-thres as --fd_thres), and values are
+  not changed. --participant-label and --session-label belong to this app:
+  MRIQC's own --participant_label(s) and --session-id are refused.
   Common MRIQC options include:
     --mem          Maximum memory available (e.g., '16G')
     --nprocs       Maximum number of parallel processes
     --omp-nthreads Maximum number of threads per process
     --no-sub       Disable anonymized metrics submission (default behavior)
-    --ica          Run ICA denoising
-    --fd-radius    Framewise displacement radius (default: 50mm)
+    --fd_thres     Framewise displacement threshold
     -m/--modalities  Modalities to rate (T1w T2w bold dwi; default: all).
                    When the app runs MRIQC, dwi needs
                    --skip-nidm-conversion: dwi IQMs cannot be converted
@@ -857,6 +974,12 @@ MRIQC Arguments:
 
     # Usage errors like argparse's own (exit status 2), before anything is
     # created or started.
+    owned = owned_mriqc_option(mriqc_extra_args)
+    if owned:
+        parser.error(
+            f"{owned[0]} cannot be passed through to MRIQC: the app owns "
+            f"that option. Use {owned[1]} instead."
+        )
     for dest, name in _PATH_ARGUMENTS:
         value = getattr(args, dest)
         if value is None:
@@ -979,6 +1102,30 @@ MRIQC Arguments:
 
     logger.info(f"Processing {len(subjects)} subject(s): {', '.join(subjects)}")
 
+    # Each subject's input NIDM, looked up once, before MRIQC: a subject whose
+    # input is an unfetched git-annex file, or whose lookup fails on the file
+    # system (an unreadable directory, a stale mount), fails in seconds
+    # rather than after the MRIQC run, and gets no standalone nidm.ttl. The
+    # failure is that subject's only; the others run. With
+    # --skip-nidm-conversion the input is not read, so it is not looked up.
+    input_nidm = {}
+    nidm_not_retrieved = set()
+    if not args.skip_nidm_conversion:
+        for subject_id in subjects:
+            try:
+                input_nidm[subject_id] = find_input_nidm(
+                    subject_id, session_id, args.nidm_input_dir, args.bids_dir,
+                    logger,
+                )
+            except NIDMInputNotRetrieved as e:
+                logger.error(f"sub-{subject_id}: {e}")
+                nidm_not_retrieved.add(subject_id)
+            except OSError as e:
+                logger.error(
+                    f"sub-{subject_id}: cannot look up its input NIDM: {e}"
+                )
+                nidm_not_retrieved.add(subject_id)
+
     # Subjects whose MRIQC run failed; they are not converted to NIDM.
     mriqc_failed = set()
 
@@ -1002,6 +1149,8 @@ MRIQC Arguments:
             # at its output root (dataset_description.json, .bidsignore, logs/,
             # the *_T1w.html reports) can collide across subjects.
             for subject_id in subjects:
+                if subject_id in nidm_not_retrieved:
+                    continue
                 subject_dir, mriqc_dir = _dirs_for(subject_id)
                 logger.info(f"Running MRIQC for sub-{subject_id} → {mriqc_dir}")
                 filter_name = f"bids_filter_sub-{subject_id}"
@@ -1062,6 +1211,12 @@ MRIQC Arguments:
     # Process each subject through NIDM conversion
     success_count = 0
     for subject_id in subjects:
+        if subject_id in nidm_not_retrieved:
+            logger.error(
+                f"sub-{subject_id} failed: its input NIDM is not available "
+                "(see above); MRIQC was not run and no nidm.ttl was written"
+            )
+            continue
         if subject_id in mriqc_failed:
             logger.error(
                 f"No IQMs for sub-{subject_id}: MRIQC was not run, failed or "
@@ -1080,6 +1235,10 @@ MRIQC Arguments:
             skip_mriqc=skip_mriqc,
             skip_nidm=args.skip_nidm_conversion,
             logger=logger,
+            **(
+                {"input_nidm": input_nidm[subject_id]}
+                if subject_id in input_nidm else {}
+            ),
         ):
             success_count += 1
 

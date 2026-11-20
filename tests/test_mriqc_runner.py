@@ -16,6 +16,7 @@ import pytest
 from unittest.mock import Mock, patch
 
 from src.mriqc.mriqc_runner import MRIQCWrapper
+from src.utils import parse_mriqc_args
 
 
 @pytest.fixture
@@ -251,19 +252,51 @@ class TestMRIQCWrapperCommands:
 
         assert cmd.count("-v") == 2
 
-    def test_create_command_with_fd_radius(self, test_dirs, mock_mriqc_version):
-        """Test MRIQC command with FD radius parameter."""
+    def test_fd_radius_is_not_a_named_option(self, test_dirs, mock_mriqc_version):
+        """MRIQC 25 has no --fd_radius; the wrapper must not invent one."""
+        import inspect
+
         wrapper = MRIQCWrapper(
             bids_dir=test_dirs["bids_dir"],
             output_dir=test_dirs["output_dir"],
         )
+        assert "fd_radius" not in inspect.signature(
+            wrapper._create_mriqc_command).parameters
 
+        # Typed by the user, it is an ordinary pass-through, spelled as typed.
         cmd = wrapper._create_mriqc_command(
-            output_dir=wrapper.mriqc_dir, fd_radius=45.0
+            output_dir=wrapper.mriqc_dir, **parse_mriqc_args(["--fd-radius", "45"])
         )
+        assert "--fd_radius" not in cmd
+        assert cmd[cmd.index("--fd-radius") + 1] == "45"
 
-        assert "--fd_radius" in cmd
-        assert "45.0" in cmd
+    @pytest.mark.parametrize("typed, expected", [
+        (["--fd_thres", "0.3"], ["--fd_thres", "0.3"]),
+        (["--fd_thres=0.3"], ["--fd_thres", "0.3"]),
+        # MRIQC defines these with the other of dash and underscore.
+        (["--fd-thres", "0.3"], ["--fd_thres", "0.3"]),
+        (["--n-procs", "2"], ["--n_procs", "2"]),
+        (["--omp-nthreads", "4"], ["--omp-nthreads", "4"]),
+        (["--omp_nthreads", "4"], ["--omp-nthreads", "4"]),
+        (["--work_dir=/w"], ["--work-dir", "/w"]),
+        (["--task_id", "a", "b"], ["--task-id", "a", "b"]),
+        (["--verbose_reports"], ["--verbose-reports"]),
+        # A name MRIQC 25.0.0rc0 does not define goes as typed.
+        (["--some_flag"], ["--some_flag"]),
+        (["--some-other"], ["--some-other"]),
+    ])
+    def test_passthrough_uses_the_spelling_mriqc_defines(
+        self, test_dirs, mock_mriqc_version, typed, expected
+    ):
+        wrapper = MRIQCWrapper(
+            bids_dir=test_dirs["bids_dir"],
+            output_dir=test_dirs["output_dir"],
+        )
+        cmd = wrapper._create_mriqc_command(
+            output_dir=wrapper.mriqc_dir, **parse_mriqc_args(typed)
+        )
+        i = cmd.index(expected[0])
+        assert cmd[i:i + len(expected)] == expected
 
     def test_create_command_with_passthrough_kwargs(
         self, test_dirs, mock_mriqc_version

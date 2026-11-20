@@ -17,18 +17,22 @@ BIDS name as the IQM JSON. An IQM record that matches no acquisition, or
 more than one, is an error rather than a guess.
 """
 
+import csv
 import logging
 from collections import Counter
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
-from rdflib import RDF, RDFS, Graph, Namespace, URIRef
+from rdflib import RDF, RDFS, Graph, Literal, Namespace, URIRef
 from rdflib.util import guess_format
+
+from .json_to_csv import IMAGE_ENTITIES
 
 PROV = Namespace("http://www.w3.org/ns/prov#")
 NIDM = Namespace("http://purl.org/nidash/nidm#")
 DCT = Namespace("http://purl.org/dc/terms/")
 SIO = Namespace("http://semanticscience.org/ontology/sio.owl#")
+BIDS = Namespace("http://bids.neuroimaging.io/")
 # The IQM properties' namespace (json_to_csv's software url). csv2nidm 4.x
 # binds the prefix mriqc to it. csv2nidm 5.0.0 builds its output with
 # rdflib's Graph.__add__, which binds the prefixes of both operands by
@@ -120,6 +124,116 @@ def fix_csv2nidm_types(ttl: Path) -> int:
     if added or len(graph) != before:
         graph.serialize(destination=str(ttl), format="turtle")
     return added
+
+
+def _run_literal(label: str) -> Literal:
+    """The run as an xsd:integer in canonical form ("01" -> 1), or the label
+    as a plain literal when it is not a whole number (a malformed filename
+    must not fail the job)."""
+    try:
+        return Literal(int(label))
+    except ValueError:
+        return Literal(label)
+
+
+class IQMLabelError(RuntimeError):
+    """csv2nidm's IQM records and the IQM CSV rows do not correspond."""
+
+
+def restore_bids_labels(iqm_ttl: Path, iqm_csv: Path) -> int:
+    """
+    Record each IQM record's BIDS labels as the IQM CSV holds them, in place.
+
+    csv2nidm re-reads the CSV with pandas and keeps only the subject id
+    column as text, so pandas reads any other label column that looks
+    numeric as numbers. A run column that mixes images without a run
+    (T1w) and images with one becomes float, and csv2nidm writes run 1 as
+    the text "1.0"; a session label 01 becomes "1"; a numeric acq, ce or rec
+    label becomes xsd:float 1.0, or xsd:integer 1 when no cell is empty.
+
+    Each record is matched to its CSV row by prov:Location, which csv2nidm
+    sets from the row's source_url, and gets:
+
+    - run as nidm:AcquisitionObject, an xsd:integer in canonical form (run-01
+      gives 1): the type PyNIDM's schema gives run, and the value rdflib reads
+      bidsmri2nidm's run as ("01"^^xsd:integer parses to 1). A pattern such
+      as ``nidm:AcquisitionObject 1``, or a join on run, then matches the
+      record as it matches the acquisition; in rdflib an xsd:int would not.
+    - ses as bids:session_number, task as nidm:Task, and acq, ce and rec under
+      their data-element property, as plain literals with the label text
+      unchanged: the form bidsmri2nidm 5.0.0 writes for the session number
+      and task, so a join on the value matches. csv2nidm writes xsd:string,
+      which rdflib does not treat as equal; compare with str() to match both.
+
+    An empty label, and the "None" task of anatomical images, gets no triple,
+    as csv2nidm does.
+
+    Args:
+        iqm_ttl: Turtle file written by csv2nidm; rewritten when anything changes
+        iqm_csv: The CSV csv2nidm converted (combine_iqm_csvs)
+
+    Returns:
+        Number of records changed
+
+    Raises:
+        IQMLabelError: If an IQM record has no CSV row or a CSV row has no
+            record, e.g. because csv2nidm wrote prov:Location differently.
+            The file is not rewritten in that case.
+    """
+    with open(iqm_csv, newline="") as f:
+        rows = {row.get("source_url"): row for row in csv.DictReader(f)}
+
+    graph = Graph()
+    graph.parse(iqm_ttl, format="turtle")
+    records = _iqm_records(graph)
+
+    unmatched_records = sorted(set(records.values()) - set(rows))
+    unmatched_rows = sorted(str(url) for url in set(rows) - set(records.values()))
+    if unmatched_records or unmatched_rows:
+        raise IQMLabelError(
+            f"csv2nidm's IQM records in {iqm_ttl.name} do not match the rows of "
+            f"{iqm_csv.name} by source_url: records without a row: "
+            f"{unmatched_records or 'none'}; rows without a record: "
+            f"{unmatched_rows or 'none'}"
+        )
+
+    entity_properties = {
+        entity: [
+            cde for cde, name in graph.subject_objects(NIDM.sourceVariable)
+            if str(name) == entity
+        ]
+        for entity in IMAGE_ENTITIES
+    }
+
+    changed = 0
+    for record, location in records.items():
+        row = rows[location]
+        task = row.get("task", "")
+        wanted = [
+            (NIDM.AcquisitionObject,
+             _run_literal(row["run"]) if row.get("run") else None),
+            (BIDS.session_number, Literal(row["ses"]) if row.get("ses") else None),
+            (NIDM.Task, Literal(task) if task not in ("", "None") else None),
+        ]
+        for entity in IMAGE_ENTITIES:
+            label = row.get(entity, "")
+            for prop in entity_properties[entity]:
+                wanted.append((prop, Literal(label) if label else None))
+
+        record_changed = False
+        for prop, literal in wanted:
+            current = set(graph.objects(record, prop))
+            target = {literal} if literal is not None else set()
+            if current != target:
+                graph.remove((record, prop, None))
+                if literal is not None:
+                    graph.add((record, prop, literal))
+                record_changed = True
+        changed += record_changed
+
+    if changed:
+        graph.serialize(destination=str(iqm_ttl), format="turtle")
+    return changed
 
 
 def serialize_nidm(graph: Graph, destination: Path) -> None:
@@ -298,8 +412,10 @@ def check_iqm_records(nidm_ttl: Path, json_files: Iterable[Path]) -> List[str]:
 
 
 __all__ = [
+    "IQMLabelError",
     "IQMLinkError",
     "check_iqm_records",
     "fix_csv2nidm_types",
     "merge_iqms_into_nidm",
+    "restore_bids_labels",
 ]

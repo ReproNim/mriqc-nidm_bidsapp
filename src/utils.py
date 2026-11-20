@@ -9,13 +9,23 @@ metadata creation.
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 # BIDS specification version declared in the dataset_description.json files this
 # app writes. This is the *spec* version, never a library version (pybids'
 # __version__ is the library, not the spec -- conflating the two is the bug this
 # constant exists to prevent). Kept in sync with freesurfer-nidm_bidsapp.
 BIDS_VERSION = "1.8.0"
+
+
+def not_fetched(path: Path) -> bool:
+    """A git-annex file whose content is not here: a broken symlink (locked)
+    or a small pointer file naming the annex object (unlocked)."""
+    if not path.exists():
+        return True
+    if path.stat().st_size > 1024:
+        return False
+    return path.read_bytes().startswith(b"/annex/objects/")
 
 
 def normalize_label(label: str, prefix: str) -> str:
@@ -97,16 +107,151 @@ def is_modalities_flag(arg: str) -> bool:
     return len(name) >= 2 and "modalities".startswith(name)
 
 
+# MRIQC's long options as its parser spells them. Taken from mriqc/cli/parser.py
+# of nipreps/mriqc at the version the Dockerfile and Singularity image pin
+# (the Python side of that pin is MRIQC_OPTIONS_VERSION, checked against both
+# files by tests/test_run.py); revisit this table when the pin moves.
+# MRIQC treats - and _ as different characters: most options have dashes only,
+# a few have underscores only (fd_thres, n_procs, n_cpus, mem_gb), and
+# participant-label has all four spellings, singular and plural.
+MRIQC_OPTIONS_VERSION = "25.0.0rc0"
+MRIQC_LONG_OPTIONS = frozenset({
+    "ants-float",
+    "ants-nthreads",
+    "ants-settings",
+    "bids-database-dir",
+    "bids-database-wipe",
+    "bids-filter-file",
+    "crashfile-format",
+    "deoblique",
+    "despike",
+    "dry-run",
+    "dsname",
+    "email",
+    "fd_thres",
+    "fft-spikes-detector",
+    "float32",
+    "mem",
+    "mem-gb",
+    "mem_gb",
+    "min-bold-length",
+    "min-dwi-length",
+    "modalities",
+    "n_cpus",
+    "n_procs",
+    "no-datalad-get",
+    "no-sub",
+    "notrack",
+    "nprocs",
+    "omp-nthreads",
+    "participant-label",
+    "participant-labels",
+    "participant_label",
+    "participant_labels",
+    "pdb",
+    "profile",
+    "reports-only",
+    "resource-monitor",
+    "run-id",
+    "session-id",
+    "species",
+    "start-idx",
+    "stop-idx",
+    "task-id",
+    "testing",
+    "upload-strict",
+    "use-plugin",
+    "verbose",
+    "verbose-reports",
+    "webapi-port",
+    "webapi-url",
+    "work-dir",
+    "write-graph",
+})
+
+
+def mriqc_spelling(typed: str) -> str:
+    """The spelling MRIQC accepts for an option typed as ``typed`` (without the leading ``--``).
+
+    MRIQC treats - and _ as different characters and spells a few options with
+    underscores (fd_thres, n_procs, n_cpus, mem_gb). A typed name MRIQC does
+    not define but whose other spelling it does is respelled; an abbreviation
+    or an option this table lacks goes through as typed.
+    """
+    if typed in MRIQC_LONG_OPTIONS:
+        return typed
+    for other in (typed.replace("-", "_"), typed.replace("_", "-")):
+        if other in MRIQC_LONG_OPTIONS:
+            return other
+    return typed
+
+
+class PassThroughKey(str):
+    """An underscored option name that remembers the flag for MRIQC.
+
+    It compares and hashes as the plain name (``fd_thres``), so lookups by
+    name keep working, while ``flag`` is what goes back on MRIQC's command
+    line, in the spelling MRIQC defines (see ``mriqc_spelling``).
+    """
+
+    flag: str
+
+    def __new__(cls, name: str, flag: str):
+        obj = super().__new__(cls, name)
+        obj.flag = flag
+        return obj
+
+    def __getnewargs__(self):
+        # str's own would drop the flag, and copy and pickle rebuild with it.
+        return (str(self), self.flag)
+
+
+# MRIQC options the app owns, with the app option to use instead. The keys are
+# the longest spelling of each, in underscore form: MRIQC's argparse accepts
+# any unambiguous prefix of an option string, so every prefix of a key is
+# claimed too (--participant_lab, --session-i). MRIQC's four participant-label
+# spellings all end up in the key "participant_labels" or a prefix of it.
+# --session_label is the app's own --session-label with an underscore, which
+# MRIQC does not define either.
+_OWNED_MRIQC_OPTIONS = {
+    "participant_labels": "--participant-label",
+    "session_id": "--session-label",
+    "session_label": "--session-label",
+}
+
+
+def owned_mriqc_option(extra_args: List[str]) -> Optional[Tuple[str, str]]:
+    """The first pass-through flag that names an option the app owns.
+
+    Returns ``(flag as typed, app option to use)``, or None. Only an option's
+    own name is read, never a value.
+    """
+    for arg in extra_args:
+        if not arg.startswith("--"):
+            continue
+        typed = arg.partition("=")[0]
+        name = typed[2:].replace("-", "_")
+        if not name:
+            continue
+        for owned, instead in _OWNED_MRIQC_OPTIONS.items():
+            if owned.startswith(name):
+                return typed, instead
+    return None
+
+
 def parse_mriqc_args(extra_args: List[str]) -> Dict[str, Any]:
     """
     Parse MRIQC extra arguments into kwargs dictionary.
 
     Converts command-line style arguments into a dictionary suitable for
     passing to MRIQCWrapper. Handles both key-value pairs and boolean flags.
+    Values stay strings: they only go back onto MRIQC's command line, and a
+    BIDS label such as ``--task-id 01`` is not the number 1. (MRIQC's own
+    numeric options are not known here, so none is converted.)
 
     Examples:
         >>> parse_mriqc_args(['--mem', '16G', '--nprocs', '12'])
-        {'mem': '16G', 'nprocs': 12}
+        {'mem': '16G', 'nprocs': '12'}
         >>> parse_mriqc_args(['--ica', '--no-sub'])
         {'ica': True, 'no_sub': True}
         >>> parse_mriqc_args(['-m', 'T1w', 'bold', '--bids-filter-file=f.json'])
@@ -118,15 +263,6 @@ def parse_mriqc_args(extra_args: List[str]) -> Dict[str, Any]:
     Returns:
         Dictionary of parsed arguments with underscored keys
     """
-    def _number(value: str) -> Any:
-        try:
-            return int(value)
-        except ValueError:
-            try:
-                return float(value)
-            except ValueError:
-                return value  # Keep as string
-
     mriqc_kwargs: Dict[str, Any] = {}
     i = 0
     while i < len(extra_args):
@@ -141,18 +277,19 @@ def parse_mriqc_args(extra_args: List[str]) -> Dict[str, Any]:
         if not arg.startswith("--"):
             i += 1
             continue
-        key, eq, inline = arg[2:].partition("=")
-        key = key.replace("-", "_")  # --omp-nthreads → omp_nthreads
+        typed, eq, inline = arg[2:].partition("=")
+        # --omp-nthreads → omp_nthreads, remembering the flag MRIQC defines.
+        key = PassThroughKey(typed.replace("-", "_"), f"--{mriqc_spelling(typed)}")
         if eq:
             # --bids-filter-file=/x/f.json: the value is part of the flag.
-            mriqc_kwargs[key] = _number(inline)
+            mriqc_kwargs[key] = inline
             i += 1
             continue
         # Every value up to the next flag: --modalities T1w bold takes both.
         values = []
         i += 1
         while i < len(extra_args) and not extra_args[i].startswith("-"):
-            values.append(_number(extra_args[i]))
+            values.append(extra_args[i])
             i += 1
         if not values:
             mriqc_kwargs[key] = True  # Boolean flag
@@ -271,6 +408,11 @@ __all__ = [
     "normalize_label",
     "normalize_participant_labels",
     "normalize_session_labels",
+    "MRIQC_LONG_OPTIONS",
+    "MRIQC_OPTIONS_VERSION",
+    "PassThroughKey",
+    "mriqc_spelling",
+    "owned_mriqc_option",
     "parse_mriqc_args",
     "setup_logging",
     "create_dataset_description",

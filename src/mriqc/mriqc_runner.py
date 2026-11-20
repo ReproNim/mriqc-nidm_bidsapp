@@ -126,7 +126,6 @@ class MRIQCWrapper:
         modalities: Optional[List[str]] = None,
         nprocs: Optional[int] = None,
         mem_gb: Optional[int] = None,
-        fd_radius: Optional[float] = None,
         no_sub: bool = True,
         verbose_count: int = 0,
         **kwargs,
@@ -148,8 +147,6 @@ class MRIQCWrapper:
             Number of parallel processes
         mem_gb : int, optional
             Memory limit in GB
-        fd_radius : float, optional
-            Radius for framewise displacement calculation (default: 50mm)
         no_sub : bool
             Disable submission of anonymized quality metrics (default: True)
         verbose_count : int
@@ -189,10 +186,6 @@ class MRIQCWrapper:
         if mem_gb is not None:
             cmd.extend(["--mem", str(mem_gb)])
 
-        # FD calculation radius (MRIQC default is 50mm)
-        if fd_radius is not None:
-            cmd.extend(["--fd_radius", str(fd_radius)])
-
         # Disable metrics submission
         if no_sub:
             cmd.append("--no-sub")
@@ -201,8 +194,11 @@ class MRIQCWrapper:
         for _ in range(verbose_count):
             cmd.append("-v")
 
-        # Additional kwargs (handles passthrough arguments from CLI)
+        # Additional kwargs (handles passthrough arguments from CLI). A key
+        # from parse_mriqc_args carries the flag as the user typed it; a
+        # plain key is spelled with dashes.
         for key, value in kwargs.items():
+            flag = getattr(key, "flag", None) or f"--{key.replace('_', '-')}"
             # Special handling for 'mem' (CLI uses --mem, wrapper uses mem_gb)
             if key == "mem":
                 if mem_gb is None:
@@ -211,11 +207,11 @@ class MRIQCWrapper:
                 # else: Skip - mem_gb parameter takes precedence
                 continue
             elif value is True:
-                cmd.append(f"--{key.replace('_', '-')}")
+                cmd.append(flag)
             elif isinstance(value, list):
-                cmd.extend([f"--{key.replace('_', '-')}", *map(str, value)])
+                cmd.extend([flag, *map(str, value)])
             elif value is not False and value is not None:
-                cmd.extend([f"--{key.replace('_', '-')}", str(value)])
+                cmd.extend([flag, str(value)])
 
         return cmd
 
