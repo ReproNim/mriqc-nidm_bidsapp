@@ -297,6 +297,32 @@ agent `prov:SoftwareAgent` (incf-nidash/PyNIDM#457) is not rewritten. csv2nidm
 from PyNIDM 5.0.0, which the image ships, already writes `rdf:type` and types
 the agent `prov:SoftwareAgent`, so with it the rewrite changes nothing.
 
+csv2nidm reads the IQM CSV with pandas and keeps only the subject id as text,
+so a label column that looks numeric is read as numbers. When a job has images
+with and without a run (T1w next to `run-1` BOLD), run 1 came out as the text
+`"1.0"`; a session label `01` came out as `"1"`, and a numeric `acq` label as
+`1.0` (`xsd:float`). Before writing `nidm.ttl`, the app sets each IQM record's
+labels from the CSV:
+
+- the run as `nidm:AcquisitionObject`, an `xsd:integer` in canonical form
+  (`run-01` gives `1`): the type PyNIDM's schema gives the run, and the value
+  bidsmri2nidm's run reads back as from its Turtle (rdflib reads
+  `"01"^^xsd:integer` as `1`). A pattern such as `nidm:AcquisitionObject 1`,
+  or a join on the run, therefore matches the IQM record as it matches the
+  input's acquisition. A run label that is not a whole number is kept as text;
+- session (`bids:session_number`), task (`nidm:Task`) and the `acq`, `ce` and
+  `rec` labels as plain literals with the text of the filename, the form
+  bidsmri2nidm 5.0.0 writes for the session number and task, so a SPARQL join
+  on the session matches the input's Session. csv2nidm, PyNIDM's documented
+  query shapes and input NIDM from bidsmri2nidm 4.5.0 use `xsd:string` for
+  these instead, and rdflib does not treat `"rest"` and `"rest"^^xsd:string`
+  as equal; a query meant to match either form should compare with `str()`,
+  e.g. `FILTER(str(?task) = "rest")`.
+
+An empty label, and the `None` task of anatomical images, gets no triple. If
+csv2nidm's records and the CSV rows do not correspond one to one (by the IQM
+JSON path), the job fails rather than writing labels it could not check.
+
 A job fails (non-zero exit), and writes no `nidm.ttl`, when csv2nidm fails,
 when an IQM record matches no acquisition or several, or when the result does
 not hold exactly one IQM record per IQM JSON. An IQM JSON the app cannot read

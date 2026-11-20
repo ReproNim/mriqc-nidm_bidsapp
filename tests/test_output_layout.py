@@ -116,6 +116,7 @@ class TestProcessSubjectLayout:
         with patch("src.run.convert_mriqc_json_to_csv", side_effect=fake_json2csv), \
              patch("src.run.convert_csv_to_nidm", side_effect=fake_csv2nidm), \
              patch("src.run.get_mriqc_dictionary", return_value=tmp_path / "d.csv"), \
+             patch("src.run.restore_bids_labels", return_value=0), \
              patch("src.run.check_iqm_records", return_value=[]):
             ok = process_subject(
                 subject_id="01",
@@ -137,3 +138,51 @@ class TestProcessSubjectLayout:
         assert not list(subject_dir.glob("*.csv"))
         # And the scratch files csv2nidm dropped are gone.
         assert not list(subject_dir.glob("*.bak"))
+
+    def test_label_mismatch_fails_the_job_and_writes_no_nidm(self, tmp_path):
+        """An IQMLabelError from restoring the labels fails the subject"""
+        import logging
+
+        from src.nidm_converter.nidm_converter import TEMPORARY_PREFIX
+        from src.nidm_converter.nidm_merge import IQMLabelError
+
+        output_dir = tmp_path / "out"
+        subject_dir = output_dir / "sub-01"
+        mriqc_dir = subject_dir / "mriqc"
+        _make_mriqc_json(mriqc_dir / "sub-01" / "anat" / "sub-01_T1w.json", "01")
+
+        def fake_json2csv(json_file, csv_file, logger):
+            Path(csv_file).parent.mkdir(parents=True, exist_ok=True)
+            Path(csv_file).write_text("a,b\n1,2\n")
+            soft = Path(csv_file).with_name("software.csv")
+            soft.write_text("x\n")
+            return Path(csv_file), soft
+
+        def fake_csv2nidm(**kwargs):
+            out = Path(kwargs["output_ttl"])
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text("@prefix x: <http://x> .")
+            return True
+
+        with patch("src.run.convert_mriqc_json_to_csv", side_effect=fake_json2csv), \
+             patch("src.run.convert_csv_to_nidm", side_effect=fake_csv2nidm), \
+             patch("src.run.get_mriqc_dictionary", return_value=tmp_path / "d.csv"), \
+             patch("src.run.restore_bids_labels",
+                   side_effect=IQMLabelError("records without a row")), \
+             patch("src.run.check_iqm_records", return_value=[]):
+            ok = process_subject(
+                subject_id="01",
+                bids_dir=tmp_path / "bids",
+                output_dir=output_dir,
+                subject_dir=subject_dir,
+                mriqc_dir=mriqc_dir,
+                session_id=None,
+                nidm_input_dir=None,
+                skip_mriqc=True,
+                skip_nidm=False,
+                logger=logging.getLogger("t"),
+            )
+
+        assert ok is False
+        assert not (subject_dir / "nidm.ttl").exists()
+        assert not list(subject_dir.glob(f"{TEMPORARY_PREFIX}*"))
