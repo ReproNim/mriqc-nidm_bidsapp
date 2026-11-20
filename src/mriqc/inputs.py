@@ -37,6 +37,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from bids import BIDSLayout, BIDSLayoutIndexer
 from bids.layout import Query
 
+from ..utils import not_fetched
+
 logger = logging.getLogger("mriqc-nidm.inputs")
 
 ANAT_SUFFIXES = ("T1w", "T2w")
@@ -70,16 +72,6 @@ def voxel_size(path: Path) -> Tuple[float, ...]:
     import nibabel as nib
 
     return tuple(round(float(z), 3) for z in nib.load(str(path)).header.get_zooms()[:3])
-
-
-def _not_fetched(path: Path) -> bool:
-    """A git-annex file whose content is not here: a broken symlink (locked)
-    or a small pointer file naming the annex object (unlocked)."""
-    if not path.exists():
-        return True
-    if path.stat().st_size > 1024:
-        return False
-    return path.read_bytes().startswith(b"/annex/objects/")
 
 
 def mriqc_layout(bids_dir: Path, subject: str) -> BIDSLayout:
@@ -201,7 +193,7 @@ def gate_anat_inputs(
         user_query = user_filters.get(suffix.lower(), {})
         keep, drop = [], []
         for path in mriqc_selects(layout, subject, session, suffix, user_query):
-            if _not_fetched(path):
+            if not_fetched(path):
                 raise ValueError(
                     f"{path.name} has no content here (a git-annex file that has not "
                     "been fetched?); run 'datalad get' on the subject first"

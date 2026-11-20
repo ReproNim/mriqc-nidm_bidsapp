@@ -244,10 +244,29 @@ holds no file for the subject: the app then writes `nidm.ttl` without an input
 document. When the NIDM input directory exists (given or default) but has no
 file for the job's subject or session, the log has a WARNING before the
 conversion that names the subject, the session and the reason (no directory
-for the subject, no file for the session, a per-session input on a run without
-`--session-label`, or a file that is a broken symbolic link, as git-annex
-leaves a file whose content was never fetched). The warning does not fail the
-job.
+for the subject, no file for the session, or a per-session input on a run
+without `--session-label`). The warning does not fail the job.
+
+A git-annex file whose content is not here counts as a file that exists: a
+broken symbolic link (a locked file whose content was never fetched) or a small
+pointer file starting with `/annex/objects/` (an unlocked one). When the file
+the lookup would use is one, the subject fails before MRIQC runs, with an error
+naming the file and suggesting `datalad get <path>`, and no `nidm.ttl` is
+written for it; the app exits 1. For a broken link the error also gives the
+link's target, since a link also breaks when its target is outside what the
+container can see: git-annex links are relative and point into the dataset's
+`.git/annex`, so bind the dataset root, not only its NIDM directory. The
+lookup does not skip a file it would use because its content is missing,
+since a readable later candidate may be a different record: a broken
+`ses-{label}/nidm.ttl` fails the subject even when
+`ses-{label}/sub-{id}_ses-{label}.ttl`, a file in `sub-{id}/` or the
+dataset-level `nidm.ttl` is readable. A file the lookup would not reach is not
+an error, for example a broken dataset-level `nidm.ttl` when the subject has a
+readable file of its own. A subject whose lookup fails for another reason (an
+unreadable directory, say) also fails before MRIQC; the other subjects of the
+run go on. A missing NIDM directory, or one with no file for the subject, still
+gives a standalone `nidm.ttl` as above. With `--skip-nidm-conversion` the input
+NIDM is not read and an unfetched file does not fail the job.
 
 #### How IQM records are written
 
