@@ -6,18 +6,40 @@ These tests verify the CLI argument parsing and passthrough functionality.
 """
 
 
-from src.utils import parse_mriqc_args
+import copy
+import pickle
+import re
+from pathlib import Path
+
+import pytest
+
+from src.utils import (
+    MRIQC_LONG_OPTIONS,
+    MRIQC_OPTIONS_VERSION,
+    PassThroughKey,
+    mriqc_spelling,
+    owned_mriqc_option,
+    parse_mriqc_args,
+)
 
 
 class TestParseMriqcArgs:
     """Test MRIQC argument parsing functionality."""
+
+    def test_zero_padded_labels_keep_their_padding(self):
+        # task-01 and task-1 are different BIDS entities.
+        assert parse_mriqc_args(["--task-id", "01"]) == {"task_id": "01"}
+        assert parse_mriqc_args(["--task-id=01"]) == {"task_id": "01"}
+        assert parse_mriqc_args(["--task-id", "01", "02", "rest"]) == {
+            "task_id": ["01", "02", "rest"]}
+        assert parse_mriqc_args(["--run-id", "01", "2"]) == {"run_id": ["01", "2"]}
 
     def test_parse_key_value_pairs(self):
         """Test parsing key-value argument pairs."""
         args = ["--mem", "16G", "--nprocs", "12", "--omp-nthreads", "8"]
         result = parse_mriqc_args(args)
 
-        assert result == {"mem": "16G", "nprocs": 12, "omp_nthreads": 8}
+        assert result == {"mem": "16G", "nprocs": "12", "omp_nthreads": "8"}
 
     def test_parse_boolean_flags(self):
         """Test parsing boolean flag arguments."""
@@ -31,11 +53,11 @@ class TestParseMriqcArgs:
         args = ["--mem", "16G", "--ica", "--nprocs", "4"]
         result = parse_mriqc_args(args)
 
-        assert result == {"mem": "16G", "ica": True, "nprocs": 4}
+        assert result == {"mem": "16G", "ica": True, "nprocs": "4"}
 
     def test_parse_multiple_values(self):
         args = ["--modalities", "T1w", "bold", "--nprocs", "4"]
-        assert parse_mriqc_args(args) == {"modalities": ["T1w", "bold"], "nprocs": 4}
+        assert parse_mriqc_args(args) == {"modalities": ["T1w", "bold"], "nprocs": "4"}
 
     def test_parse_short_modalities_flag(self):
         assert parse_mriqc_args(["-m", "T1w", "bold"]) == {"modalities": ["T1w", "bold"]}
@@ -52,12 +74,12 @@ class TestParseMriqcArgs:
 
         assert result == {}
 
-    def test_parse_float_value(self):
-        """Test parsing float values."""
+    def test_parse_number_like_value_stays_a_string(self):
+        """A value is a string unless MRIQC's option is known to be numeric."""
         args = ["--fd-radius", "45.5"]
         result = parse_mriqc_args(args)
 
-        assert result == {"fd_radius": 45.5}
+        assert result == {"fd_radius": "45.5"}
 
     def test_parse_string_value_not_number(self):
         """Test that non-numeric strings are kept as strings."""
@@ -105,5 +127,82 @@ class TestParseMriqcArgs:
         result = parse_mriqc_args(args)
 
         assert result["mem"] == "16G"
-        assert result["nprocs"] == 12
-        assert result["omp_nthreads"] == 8
+        assert result["nprocs"] == "12"
+        assert result["omp_nthreads"] == "8"
+
+
+class TestOwnedOptions:
+    """owned_mriqc_option finds the pass-through flags the app owns."""
+
+    @pytest.mark.parametrize("typed, flag, instead", [
+        (["--participant_label", "2"], "--participant_label", "--participant-label"),
+        (["--participant-label", "2"], "--participant-label", "--participant-label"),
+        (["--participant_label=2"], "--participant_label", "--participant-label"),
+        # MRIQC's plural aliases: the same option, the last occurrence wins.
+        (["--participant-labels", "2"], "--participant-labels", "--participant-label"),
+        (["--participant_labels", "2"], "--participant_labels", "--participant-label"),
+        (["--participant_labels=2"], "--participant_labels", "--participant-label"),
+        # Abbreviations MRIQC's argparse takes.
+        (["--participant_lab", "2"], "--participant_lab", "--participant-label"),
+        (["--participant-labe", "2"], "--participant-labe", "--participant-label"),
+        (["--ica", "--session-id", "2"], "--session-id", "--session-label"),
+        (["--session_id=2"], "--session_id", "--session-label"),
+        (["--session-i", "2"], "--session-i", "--session-label"),
+        # The app's own option with an underscore falls through its parser.
+        (["--session_label", "2"], "--session_label", "--session-label"),
+    ])
+    def test_finds_the_owned_flag_and_its_remedy(self, typed, flag, instead):
+        assert owned_mriqc_option(typed) == (flag, instead)
+
+    @pytest.mark.parametrize("typed", [
+        [], ["--task-id", "01"], ["--fd_thres", "0.3"], ["-m", "T1w"], ["--"],
+        ["--bids-filter-file=participant_label"],
+        ["--species", "human"], ["--start-idx", "1"],
+    ])
+    def test_ignores_everything_else(self, typed):
+        assert owned_mriqc_option(typed) is None
+
+    def test_no_other_mriqc_option_is_claimed(self):
+        # Every MRIQC option string and every prefix of it, apart from the
+        # owned ones (and the prefixes shared with them).
+        owned = {"participant-label", "participant-labels", "participant_label",
+                 "participant_labels", "session-id"}
+        for option in MRIQC_LONG_OPTIONS - owned:
+            for n in range(1, len(option) + 1):
+                prefix = option[:n]
+                got = owned_mriqc_option(["--" + prefix])
+                shared = any(o.replace("-", "_").startswith(prefix.replace("-", "_"))
+                             for o in owned)
+                assert (got is not None) == shared, (prefix, got)
+
+
+class TestMriqcSpelling:
+    def test_mriqc_option_strings_are_kept(self):
+        for option in MRIQC_LONG_OPTIONS:
+            assert mriqc_spelling(option) == option
+
+    @pytest.mark.parametrize("typed, expected", [
+        ("fd-thres", "fd_thres"), ("omp_nthreads", "omp-nthreads"),
+        ("n-cpus", "n_cpus"), ("unknown_one", "unknown_one"), ("omp-nth", "omp-nth"),
+    ])
+    def test_respells_by_the_table(self, typed, expected):
+        assert mriqc_spelling(typed) == expected
+
+    def test_table_is_for_the_pinned_mriqc_version(self):
+        # A new MRIQC image needs its parser.py options compared with
+        # MRIQC_LONG_OPTIONS before this passes again.
+        root = Path(__file__).resolve().parent.parent
+        for name in ("Dockerfile", "Singularity"):
+            pinned = re.findall(
+                r"^From:\s*nipreps/mriqc:(\S+)|^FROM\s+nipreps/mriqc:(\S+)",
+                (root / name).read_text(), re.M | re.I)
+            versions = {a or b for a, b in pinned}
+            assert versions == {MRIQC_OPTIONS_VERSION}, (name, versions)
+
+
+class TestPassThroughKey:
+    def test_copies_and_pickles_keep_the_flag(self):
+        key = PassThroughKey("fd_thres", "--fd_thres")
+        for clone in (copy.copy(key), copy.deepcopy({key: 1}).popitem()[0],
+                      pickle.loads(pickle.dumps(key))):
+            assert clone == "fd_thres" and clone.flag == "--fd_thres"

@@ -32,6 +32,7 @@ from .mriqc.inputs import gate_anat_inputs
 from .mriqc.mriqc_runner import MRIQCWrapper, is_iqm_json
 from .utils import (
     normalize_label,
+    owned_mriqc_option,
     parse_mriqc_args,
     setup_logging,
     create_dataset_description,
@@ -761,14 +762,17 @@ def main():
         description="MRIQC-NIDM BIDS App - Execute MRIQC and convert to NIDM format",
         epilog="""
 MRIQC Arguments:
-  Any additional arguments not listed above are passed directly to MRIQC.
+  Other arguments are passed to MRIQC as MRIQC spells them: a name MRIQC
+  defines with the other of dash and underscore is respelled (--omp_nthreads
+  reaches MRIQC as --omp-nthreads, --fd-thres as --fd_thres), and values are
+  not changed. --participant-label and --session-label belong to this app:
+  MRIQC's own --participant_label(s) and --session-id are refused.
   Common MRIQC options include:
     --mem          Maximum memory available (e.g., '16G')
     --nprocs       Maximum number of parallel processes
     --omp-nthreads Maximum number of threads per process
     --no-sub       Disable anonymized metrics submission (default behavior)
-    --ica          Run ICA denoising
-    --fd-radius    Framewise displacement radius (default: 50mm)
+    --fd_thres     Framewise displacement threshold
 
   For full MRIQC options, see: https://mriqc.readthedocs.io/
 """,
@@ -861,6 +865,12 @@ MRIQC Arguments:
 
     # Usage errors like argparse's own (exit status 2), before anything is
     # created or started.
+    owned = owned_mriqc_option(mriqc_extra_args)
+    if owned:
+        parser.error(
+            f"{owned[0]} cannot be passed through to MRIQC: the app owns "
+            f"that option. Use {owned[1]} instead."
+        )
     for dest, name in _PATH_ARGUMENTS:
         value = getattr(args, dest)
         if value is None:

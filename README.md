@@ -117,6 +117,12 @@ error (status 2). It is not read as the current directory; name that as `.`.
 - `-v, --verbose`: Enable verbose output
 - `--version`: Show version information
 
+Other options go to MRIQC. A name MRIQC defines with the other of dash and
+underscore is respelled (`--omp_nthreads` is sent as `--omp-nthreads`,
+`--fd-thres` as `--fd_thres`) and values are sent as typed. `--participant-label`
+and `--session-label` belong to this app, so MRIQC's `--participant_label(s)`
+and `--session-id` are refused with a usage error, also with `--skip-mriqc`.
+
 ### Output Structure
 
 Everything this app produces for a subject lives under that subject's own
