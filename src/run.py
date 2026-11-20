@@ -45,7 +45,11 @@ from .nidm_converter import (
 )
 from .check_pynidm import pynidm_installation
 from .nidm_converter.csv_to_nidm import check_csv2nidm_available
-from .nidm_converter.nidm_converter import TEMPORARY_PREFIX
+from .nidm_converter.nidm_converter import (
+    TEMPORARY_PREFIX,
+    dataset_nidm_path,
+    session_nidm_candidates,
+)
 from .nidm_converter.json_to_csv import combine_iqm_csvs, extract_session_label
 from .nidm_converter.nidm_merge import (
     check_iqm_records,
@@ -388,6 +392,76 @@ def _iqm_jsons_of_session(
     return in_session
 
 
+def _why_no_input_nidm(
+    nidm_root: Path, subject_id: str, session_id: Optional[str]
+) -> str:
+    """The reason the lookup of detect_existing_nidm found no file in nidm_root.
+
+    It looks at the files that lookup tries, in the same order. A file there
+    that is a broken symbolic link (how git-annex leaves a file whose content
+    was never fetched) fails the lookup's is_file() test and is named first.
+    """
+    subject_root = nidm_root / f"sub-{subject_id}"
+    session_files = session_nidm_candidates(nidm_root, subject_id, session_id)
+    for path in session_files + [dataset_nidm_path(nidm_root)]:
+        if path.is_symlink() and not path.exists():
+            return (
+                f"{path} is a broken symbolic link (if it is a git-annex "
+                "file, 'datalad get' fetches its content)"
+            )
+    if not subject_root.is_dir():
+        return f"it has no sub-{subject_id} directory and no nidm.ttl"
+    if session_id:
+        names = " or ".join(str(p.relative_to(subject_root)) for p in session_files)
+        return (
+            f"{subject_root} has no {names}, and no NIDM file for the whole "
+            "subject"
+        )
+    if any(subject_root.glob("ses-*/*.ttl")):
+        return (
+            f"{subject_root} keeps its NIDM per session; pass --session-label "
+            "to add the IQMs to one session's NIDM"
+        )
+    return f"{subject_root} has no NIDM file"
+
+
+def _log_missing_input_nidm(
+    subject_id: str,
+    session_id: Optional[str],
+    nidm_input_dir: Optional[Path],
+    bids_dir: Path,
+    logger: logging.Logger,
+) -> None:
+    """Say that a job writes a standalone nidm.ttl because no input NIDM was found.
+
+    A NIDM directory that exists but has no file for this job is a warning:
+    the dataset has NIDM, this subject or session is missing from it, and the
+    job still succeeds. Under BABS the job log is the only place this shows.
+    With no NIDM directory at all, the run is standalone by choice.
+    """
+    nidm_root = nidm_input_dir if nidm_input_dir else bids_dir.parent / "NIDM"
+    job = f"sub-{subject_id}" + (f" ses-{session_id}" if session_id else "")
+    standalone = (
+        "writing a standalone nidm.ttl that is not linked to the subject's "
+        "other NIDM records"
+    )
+    if nidm_root.is_dir():
+        reason = _why_no_input_nidm(nidm_root, subject_id, session_id)
+        logger.warning(
+            f"No NIDM input for {job} in {nidm_root}: {reason}; {standalone}"
+        )
+    elif os.path.lexists(nidm_root):
+        logger.warning(
+            f"No NIDM input for {job}: {nidm_root} is not a directory (or is a "
+            f"broken symbolic link); {standalone}"
+        )
+    else:
+        logger.info(
+            f"No NIDM input for {job} ({nidm_root} does not exist): "
+            "writing a standalone nidm.ttl"
+        )
+
+
 def process_subject(
     subject_id: str,
     bids_dir: Path,
@@ -505,6 +579,14 @@ def process_subject(
                 "it with bidsmri2nidm."
             )
             return False
+
+        # Logged here, after the checks that end the job before any conversion
+        # starts, so a job stopped by them does not announce a standalone
+        # nidm.ttl. A conversion that fails later can still leave none.
+        if existing_nidm is None:
+            _log_missing_input_nidm(
+                subject_id, session_id, nidm_input_dir, bids_dir, logger
+            )
 
         # NIDM output sits directly in the subject directory, beside the analysis
         # results, and is ALWAYS named nidm.ttl -- subject identity is carried by
