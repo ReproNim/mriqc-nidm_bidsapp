@@ -111,7 +111,8 @@ error (status 2). It is not read as the current directory; name that as `.`.
 - `--session-label`: Session label(s) to process (without 'ses-' prefix)
 - `--skip-mriqc`: Skip MRIQC execution, use existing output
 - `--mriqc-output-dir`: Use existing MRIQC output directory
-- `--skip-nidm-conversion`: Run MRIQC only, skip NIDM conversion
+- `--skip-nidm-conversion`: Run MRIQC only, skip NIDM conversion. When the
+  app runs MRIQC, required to name `dwi` in MRIQC's `-m`/`--modalities`; see [Diffusion (dwi) images](#diffusion-dwi-images)
 - `--max-voxel-size`: Leave out T1w/T2w images with any voxel dimension
   above this, in mm (off by default); see [Anatomical images MRIQC cannot rate](#anatomical-images-mriqc-cannot-rate)
 - `-v, --verbose`: Enable verbose output
@@ -133,7 +134,7 @@ output_dir/
 ├── dataset_description.json     # derivative root, written once
 └── sub-{id}/                    # [/ses-{label}/] when --session-label is given
     ├── nidm.ttl                 # input NIDM + this app's MRIQC metrics
-    ├── processing_summary.json  # with --max-voxel-size: images left out
+    ├── processing_summary.json  # images left out (--max-voxel-size, dwi IQMs)
     └── mriqc/                   # MRIQC outputs (IQM JSON, HTML reports, logs)
         └── sub-{id}/
             └── [ses-{label}/]
@@ -346,6 +347,41 @@ This catches MRIQC failures, not every missing IQM:
   check, and the app converts the IQM JSONs it finds.
 - A re-run into an existing output directory also reads IQM JSONs left by an
   earlier run.
+
+#### Diffusion (dwi) images
+
+dwi IQMs are not converted to NIDM yet. The MRIQC IQM data dictionary the
+conversion uses has no dwi metrics, and csv2nidm, given a column the
+dictionary does not describe, asks for an annotation on standard input, which
+fails in a batch job without writing `nidm.ttl`. So:
+
+- Naming `dwi` in MRIQC's `-m`/`--modalities` in a run that starts MRIQC
+  and converts to NIDM is a usage error (status 2), before MRIQC starts. The
+  app passes MRIQC a single `-m`: `-m`, `--modalities` and every long prefix
+  of it from `--mo` on, with or without `=`, are one option, and when it is
+  given more than once the last one counts. The attached short forms
+  `-mdwi` and `-m=dwi` are not recognised: the app drops them, so MRIQC
+  rates every modality and the dwi IQMs are left out as below.
+  Drop `dwi` (`-m T1w T2w bold`), or add `--skip-nidm-conversion` to rate dwi
+  without NIDM conversion. With `--skip-mriqc` or `--mriqc-output-dir` MRIQC
+  does not run, `-m` has no effect, and it is not checked.
+- Without `-m`, MRIQC rates every modality, dwi included, and writes its dwi
+  IQMs and reports under `mriqc/` as usual. The NIDM conversion leaves the dwi
+  IQM JSONs out, logs one warning that lists them, and converts the others.
+  The left-out files are also listed, relative to the MRIQC output directory,
+  under `dwi_iqms_not_converted` in the subject's `processing_summary.json`.
+  A summary that cannot be read (for example one cut short by a killed job)
+  is replaced, with `earlier_summary_unreadable` giving the reason; without
+  dwi IQMs it is left as it is. Either way the app logs a warning.
+  A failure in MRIQC's dwi workflow still fails the subject, like any other
+  MRIQC failure; pass `-m T1w T2w bold` to avoid running it.
+- dwi IQM JSONs found in `--mriqc-output-dir`, or left by an earlier run, are
+  left out the same way.
+- A subject whose only IQM JSONs are dwi gets no `nidm.ttl`, and the job
+  fails.
+
+An IQM JSON counts as dwi when it is in a `dwi/` directory or its BIDS suffix
+is `dwi` (`sub-01_ses-1_run-1_dwi.json`).
 
 **Running under BABS:** pair this layout with `zip_foldernames: {${subid}: "<version>"}`
 so the zip's top-level folder is `sub-{id}` and results unzip straight into

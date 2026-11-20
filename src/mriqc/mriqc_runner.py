@@ -29,6 +29,17 @@ def is_iqm_json(path: Path) -> bool:
     return path.suffix == ".json" and not path.name.endswith("_timeseries.json")
 
 
+def is_dwi_iqm_json(path: Path) -> bool:
+    """True for an MRIQC IQM JSON of a diffusion image.
+
+    MRIQC writes these to a dwi/ directory, sub-<id>/[ses-<x>/]dwi/, under
+    the image's BIDS name, whose suffix is dwi
+    (sub-01_ses-1_acq-b1000_run-1_dwi.json). Either one marks the file, so a
+    JSON moved out of its datatype directory is still recognised.
+    """
+    return path.parent.name == "dwi" or path.stem.rsplit("_", 1)[-1] == "dwi"
+
+
 class MRIQCWrapper:
     """Wrapper for MRIQC quality control tool."""
 

@@ -25,11 +25,11 @@ import signal
 import sys
 import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from . import __version__
 from .mriqc.inputs import gate_anat_inputs
-from .mriqc.mriqc_runner import MRIQCWrapper, is_iqm_json
+from .mriqc.mriqc_runner import MRIQCWrapper, is_dwi_iqm_json, is_iqm_json
 from .utils import (
     normalize_label,
     owned_mriqc_option,
@@ -264,6 +264,96 @@ def _nidm_input_dir(value: str) -> Path:
 
 # MRIQC 25's --modalities choices, and its default when none is given.
 MRIQC_MODALITIES = ("T1w", "T2w", "bold", "dwi")
+
+# Why dwi IQMs are not converted to NIDM. A column csv2nidm finds no row for
+# in the data dictionary makes it ask for an annotation on standard input,
+# which fails in a batch job, and no nidm.ttl is written.
+DWI_NOT_CONVERTED = (
+    "dwi IQMs cannot be converted to NIDM yet (the MRIQC IQM data dictionary "
+    "has no dwi metrics)"
+)
+
+
+def _explicit_dwi_request(mriqc_extra_args: List[str]) -> bool:
+    """True if the MRIQC command the app builds names dwi in -m.
+
+    Read from parse_mriqc_args, which builds that command: it gives -m,
+    --modalities and its prefixes (--mo, --mod, ...) one key, and the last
+    of them wins. A bare -m, or none, is not an explicit request: MRIQC then
+    runs every modality, and the dwi IQMs are left out of the NIDM
+    conversion instead.
+    """
+    requested = parse_mriqc_args(mriqc_extra_args).get("modalities")
+    if requested is True or not requested:
+        return False
+    if not isinstance(requested, list):
+        requested = [requested]
+    return "dwi" in requested
+
+
+def _without_dwi_iqms(
+    json_files: List[Path],
+    mriqc_dir: Path,
+    subject_dir: Path,
+    logger: logging.Logger,
+) -> List[Path]:
+    """The IQM JSONs that are not dwi; the dwi ones are logged in one warning.
+
+    They come from MRIQC run without -m, which rates dwi too, or from a
+    --mriqc-output-dir that holds them. They are also listed, relative to
+    mriqc_dir, under "dwi_iqms_not_converted" in the subject's
+    processing_summary.json, so a nidm.ttl without them is explained in the
+    subject's own output and not only in the job log.
+    """
+    dwi = [f for f in json_files if is_dwi_iqm_json(f)]
+    summary_file = subject_dir / "processing_summary.json"
+    summary, unreadable = _read_processing_summary(summary_file)
+    if dwi:
+        logger.warning(
+            f"Not converting {len(dwi)} dwi IQM JSON file(s) to NIDM, "
+            f"{DWI_NOT_CONVERTED}: " + ", ".join(f.name for f in dwi)
+        )
+        if summary is None:
+            # What it held cannot be kept; say so in the file, so a summary
+            # without the gate's keys is not read as the gate finding nothing.
+            logger.warning(f"Replacing unreadable {summary_file} ({unreadable})")
+            summary = {"earlier_summary_unreadable": unreadable}
+        summary["dwi_iqms_not_converted"] = [
+            f.relative_to(mriqc_dir).as_posix() for f in dwi
+        ]
+    elif summary is not None and "dwi_iqms_not_converted" in summary:
+        # From an earlier run over other MRIQC output (--skip-mriqc keeps
+        # the summary).
+        del summary["dwi_iqms_not_converted"]
+    else:
+        # Nothing to record, or an unreadable summary to leave as it is.
+        if summary is None:
+            logger.warning(f"Ignoring unreadable {summary_file} ({unreadable})")
+        return json_files
+    if summary:
+        subject_dir.mkdir(parents=True, exist_ok=True)
+        summary_file.write_text(json.dumps(summary, indent=2))
+    else:
+        summary_file.unlink()
+    return [f for f in json_files if not is_dwi_iqm_json(f)]
+
+
+def _read_processing_summary(summary_file: Path) -> Tuple[Optional[dict], str]:
+    """The subject's processing_summary.json as a dict, and why it could not
+    be read: ({}, "") when there is none, (None, reason) when it cannot be
+    read or is not a JSON object, for example a file left empty or cut short
+    by a job killed while writing it."""
+    if not summary_file.exists():
+        return {}, ""
+    try:
+        summary = json.loads(summary_file.read_text())
+    except (OSError, ValueError) as e:
+        summary, reason = None, str(e)
+    else:
+        reason = "not a JSON object"
+    if isinstance(summary, dict):
+        return summary, ""
+    return None, reason
 
 
 def _gate_mriqc_inputs(
@@ -563,6 +653,15 @@ def process_subject(
             logger.info("Skipping NIDM conversion (--skip-nidm-conversion flag)")
             return True
 
+        # dwi IQMs never reach csv2nidm (see DWI_NOT_CONVERTED).
+        json_files = _without_dwi_iqms(json_files, mriqc_dir, subject_dir, logger)
+        if not json_files:
+            logger.error(
+                f"No NIDM written for sub-{subject_id}: its only MRIQC JSON "
+                f"files are dwi, and {DWI_NOT_CONVERTED}"
+            )
+            return False
+
         # Step 2: The existing NIDM input. main() looks it up before MRIQC
         # runs and passes the result; a caller that does not is served here,
         # only after the --skip-nidm return: a run that writes no NIDM does
@@ -773,6 +872,10 @@ MRIQC Arguments:
     --omp-nthreads Maximum number of threads per process
     --no-sub       Disable anonymized metrics submission (default behavior)
     --fd_thres     Framewise displacement threshold
+    -m/--modalities  Modalities to rate (T1w T2w bold dwi; default: all).
+                   When the app runs MRIQC, dwi needs
+                   --skip-nidm-conversion: dwi IQMs cannot be converted
+                   to NIDM yet.
 
   For full MRIQC options, see: https://mriqc.readthedocs.io/
 """,
@@ -834,7 +937,13 @@ MRIQC Arguments:
     parser.add_argument(
         "--skip-nidm-conversion",
         action="store_true",
-        help="Run MRIQC only, skip NIDM conversion",
+        help=(
+            "Run MRIQC only, skip NIDM conversion. When the app runs MRIQC "
+            "(no --skip-mriqc or --mriqc-output-dir), required to name dwi "
+            "in MRIQC's -m/--modalities: dwi IQMs cannot be converted to "
+            "NIDM yet. Without -m, MRIQC rates dwi and the NIDM conversion leaves "
+            "its IQMs out with a warning"
+        ),
     )
     parser.add_argument(
         "--max-voxel-size",
@@ -885,6 +994,20 @@ MRIQC Arguments:
             args.nidm_input_dir = _nidm_input_dir(args.nidm_input_dir)
         except argparse.ArgumentTypeError as e:
             parser.error(f"argument --nidm-input-dir: {e}")
+    # Asking MRIQC for dwi in a run that converts to NIDM would rate the dwi
+    # images and then leave every one of their IQMs out of nidm.ttl. -m is
+    # only used when the app runs MRIQC.
+    runs_mriqc = not (args.skip_mriqc or args.mriqc_output_dir)
+    if (
+        runs_mriqc
+        and not args.skip_nidm_conversion
+        and _explicit_dwi_request(mriqc_extra_args)
+    ):
+        parser.error(
+            f"argument -m/--modalities: {DWI_NOT_CONVERTED}. Drop dwi from "
+            "--modalities, or pass --skip-nidm-conversion to run MRIQC on dwi "
+            "without NIDM conversion"
+        )
 
     # Validate the input before creating anything or starting MRIQC.
     #
@@ -1034,8 +1157,9 @@ MRIQC Arguments:
                 if session_id:
                     filter_name += f"_ses-{session_id}"
                 run_kwargs = mriqc_kwargs
-                # Only the gate writes it, so a summary from an earlier run
-                # with other settings must not survive into this one's zip.
+                # The gate and the NIDM conversion rewrite it, so a summary
+                # from an earlier run with other settings must not survive
+                # into this one's zip.
                 (subject_dir / "processing_summary.json").unlink(missing_ok=True)
                 try:
                     if args.max_voxel_size is not None:
